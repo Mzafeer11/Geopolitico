@@ -16,6 +16,7 @@ from backend.tools.gis_tools import geocode_landmark_tool, natural_boundary_tool
 
 # ─── Session Store ───────────────────────────────────────────────────────────
 _sessions: Dict[str, Dict[str, Any]] = {}
+_BLACKLISTED_MODELS = set()
 
 # ─── Natural Boundaries mapping ──────────────────────────────────────────────
 BOUNDARY_COUNTRIES_MAP = {
@@ -115,24 +116,24 @@ class ScenarioStateResult(BaseModel):
 
 def _get_active_model() -> str:
     """Get the first non-exhausted model, prioritizing GPT-4o models for stable schema generation."""
-    available = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS]
+    available = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
     if not available:
         EXHAUSTED_MODELS.clear()
-        available = GITHUB_MODELS.copy()
+        available = [m for m in GITHUB_MODELS if m not in _BLACKLISTED_MODELS]
     
     # Prioritize GPT-4o models
     for m in available:
         if "gpt-4o" in m.lower():
             return m
-    return available[0]
+    return available[0] if available else GITHUB_MODELS[0]
 
 
 def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
     """Tries to invoke structured output, falling back to other models on RateLimitError."""
-    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS]
+    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
     if not available_models:
         EXHAUSTED_MODELS.clear()
-        available_models = GITHUB_MODELS.copy()
+        available_models = [m for m in GITHUB_MODELS if m not in _BLACKLISTED_MODELS]
         
     # Prioritize GPT-4o models first in the attempt list
     attempt_list = []
@@ -179,10 +180,89 @@ def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
             last_error = e
             # Add to exhausted list if rate limit or auth limits hit
             err_msg = str(e).lower()
-            if "rate limit" in err_msg or "429" in err_msg or "quota" in err_msg or "not found" in err_msg:
+            if "rate limit" in err_msg or "429" in err_msg or "quota" in err_msg or "not found" in err_msg or "too many requests" in err_msg:
                 EXHAUSTED_MODELS.add(model)
+                _BLACKLISTED_MODELS.add(model)
+                print(f"[SIMULATOR] Permanently blacklisting model '{clean_model}' from further attempts.", flush=True)
                 
     raise last_error or RuntimeError("All models failed to complete structured schema generation.")
+
+
+def force_conquest_provinces(territories: List[TerritoryChange], scenario_text: str):
+    """Post-processing guardrail to ensure critical scenario cities are added to territories."""
+    scenario_lower = scenario_text.lower()
+    umayyad_t = None
+    for t in territories:
+        if "umayyad" in t.name.lower():
+            umayyad_t = t
+            break
+            
+    if umayyad_t:
+        if "constantinople" in scenario_lower:
+            turkey_p = None
+            for p in umayyad_t.partial_countries:
+                if p.country.lower() == "turkey":
+                    turkey_p = p
+                    break
+            else:
+                turkey_p = PartialRegion(country="Turkey", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Byzantine Capital")
+                umayyad_t.partial_countries.append(turkey_p)
+            if "Istanbul (Turkey)" not in turkey_p.provinces:
+                turkey_p.provinces.append("Istanbul (Turkey)")
+        if "tours" in scenario_lower or "poitiers" in scenario_lower:
+            france_p = None
+            for p in umayyad_t.partial_countries:
+                if p.country.lower() == "france":
+                    france_p = p
+                    break
+            else:
+                france_p = PartialRegion(country="France", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Tours region")
+                umayyad_t.partial_countries.append(france_p)
+            for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
+                if f_prov not in france_p.provinces:
+                    france_p.provinces.append(f_prov)
+
+
+def _run_geopolitical_validation(
+    result: ScenarioStateResult, 
+    scenario: str, 
+    year: int, 
+    context: Dict[str, Any]
+) -> ScenarioStateResult:
+    """Invoke the secondary validation LLM node to audit contiguity, remove enclaves, and enforce exclusivity."""
+    try:
+        baseline_pols = context.get("baseline_polities", []) if context else []
+        winner_polity = baseline_pols[0] if baseline_pols else "Conqueror"
+        
+        template = _load_prompt_template("validation.txt")
+        if not template:
+            print("[WARN] Validation template validation.txt not found. Skipping validation node.", flush=True)
+            return result
+            
+        current_result_json = result.model_dump_json(indent=2)
+        prompt = template.format(
+            scenario=scenario,
+            year=year,
+            winner_polity=winner_polity,
+            current_result_json=current_result_json
+        )
+        
+        print(f"[SIMULATOR] Launching Geopolitical Validation Node for '{winner_polity}'...", flush=True)
+        validated_result: ScenarioStateResult = _invoke_structured_with_fallback(
+            ScenarioStateResult, 
+            [SystemMessage(content=prompt)], 
+            temperature=0.2
+        )
+        
+        # Apply force_conquest_provinces on the validated output as a post-processing guardrail
+        force_conquest_provinces(validated_result.territories, scenario)
+        
+        print("[SIMULATOR] Geopolitical Validation completed successfully.", flush=True)
+        return validated_result
+    except Exception as e:
+        print(f"[WARN] Geopolitical Validation failed: {e}. Falling back to original result.", flush=True)
+        traceback.print_exc()
+        return result
 
 
 # ─── Spatial Contest Finder ──────────────────────────────────────────────────
@@ -576,40 +656,8 @@ def _run_conquest_sim(
     else:
         real_prompt = f"Simulate military conquest: {scenario_val}. contested: {contested_provinces}"
         
-    def force_conquest_provinces(territories):
-        umayyad_t = None
-        for t in territories:
-            if "umayyad" in t.name.lower():
-                umayyad_t = t
-                break
-        
-        if umayyad_t:
-            if "constantinople" in scenario_lower:
-                turkey_p = None
-                for p in umayyad_t.partial_countries:
-                    if p.country.lower() == "turkey":
-                        turkey_p = p
-                        break
-                else:
-                    turkey_p = PartialRegion(country="Turkey", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Byzantine Capital")
-                    umayyad_t.partial_countries.append(turkey_p)
-                if "Istanbul (Turkey)" not in turkey_p.provinces:
-                    turkey_p.provinces.append("Istanbul (Turkey)")
-            if "tours" in scenario_lower or "poitiers" in scenario_lower:
-                france_p = None
-                for p in umayyad_t.partial_countries:
-                    if p.country.lower() == "france":
-                        france_p = p
-                        break
-                else:
-                    france_p = PartialRegion(country="France", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Tours region")
-                    umayyad_t.partial_countries.append(france_p)
-                for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
-                    if f_prov not in france_p.provinces:
-                        france_p.provinces.append(f_prov)
-
     res_real: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=real_prompt)], temperature=0.7)
-    force_conquest_provinces(res_real.territories)
+    force_conquest_provinces(res_real.territories, scenario_val)
     
     real_conquests_str = ""
     for t in res_real.territories:
@@ -672,7 +720,11 @@ def _run_conquest_sim(
         opt_prompt = real_prompt
         
     res_opt: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=opt_prompt)], temperature=0.7)
-    force_conquest_provinces(res_opt.territories)
+    force_conquest_provinces(res_opt.territories, scenario_val)
+    
+    # Run the Geopolitical Validation AI Node to enforce contiguity and exclusivity
+    res_real = _run_geopolitical_validation(res_real, scenario_val, year_val, context_val)
+    res_opt = _run_geopolitical_validation(res_opt, scenario_val, year_val, context_val)
     
     if baselines_override_real:
         context_val["stage2_baselines"] = baselines_override_real
@@ -1779,7 +1831,16 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
         base_geom = None
         if stage2_baselines and actual_name in stage2_baselines:
             base_geom = stage2_baselines[actual_name]
-            print(f"[DEBUG]     Using COMPOUNDED Stage 1 final geometry as baseline for polity '{actual_name}'. Area: {base_geom.area:.4f}", flush=True)
+            print(f"[DEBUG]     Retrieved COMPOUNDED Stage 1 final geometry for '{actual_name}'. Area: {base_geom.area:.4f}", flush=True)
+            print(f"[DEBUG]     Merging with actual historical baseline at year {year}...", flush=True)
+            hist_feat = cliopatria_db.get_polity_geometry(actual_name, year)
+            if hist_feat and hist_feat.get("geometry"):
+                try:
+                    hist_geom = shape(hist_feat["geometry"])
+                    base_geom = base_geom.union(hist_geom)
+                    print(f"[DEBUG]     Merged baseline successfully. Final base area: {base_geom.area:.4f}", flush=True)
+                except Exception as e:
+                    print(f"[DEBUG]     Error merging historical baseline for {actual_name} at year {year}: {e}", flush=True)
         else:
             print(f"[DEBUG]   Loading baseline geometry for polity: '{actual_name}' at year {year}...", flush=True)
             base_feat = cliopatria_db.get_polity_geometry(actual_name, year)

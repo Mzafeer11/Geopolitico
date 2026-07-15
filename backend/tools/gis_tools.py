@@ -162,12 +162,43 @@ def natural_boundary_tool(name: str) -> Dict[str, Any]:
                             elif gtype == "MultiLineString":
                                 lines.extend(coords)
                             elif gtype in ["Polygon", "MultiPolygon"]:
-                                if gtype == "Polygon" and coords:
-                                    lines.append(coords[0])
-                                elif gtype == "MultiPolygon":
-                                    for poly_coords in coords:
-                                        if poly_coords:
-                                            lines.append(poly_coords[0])
+                                # Programmatically construct a centerline (spine) through the long direction of the polygon
+                                try:
+                                    from shapely.geometry import shape, LineString
+                                    poly = shape(geom)
+                                    if poly.is_valid and not poly.is_empty:
+                                        minx, miny, maxx, maxy = poly.bounds
+                                        dx = maxx - minx
+                                        dy = maxy - miny
+                                        slice_points = []
+                                        
+                                        if dx > dy:
+                                            # Slice vertically (east-west range like Pyrenees)
+                                            # Use 20 slices to get a smooth line
+                                            x_steps = [minx + (i / 20.0) * dx for i in range(1, 20)]
+                                            for x in x_steps:
+                                                slice_line = LineString([(x, miny - 1.0), (x, maxy + 1.0)])
+                                                intersect = poly.intersection(slice_line)
+                                                if intersect and not intersect.is_empty:
+                                                    slice_points.append([x, intersect.centroid.y])
+                                            # Sort west to east
+                                            slice_points.sort(key=lambda pt: pt[0])
+                                        else:
+                                            # Slice horizontally (north-south range)
+                                            y_steps = [miny + (i / 20.0) * dy for i in range(1, 20)]
+                                            for y in y_steps:
+                                                slice_line = LineString([(minx - 1.0, y), (maxx + 1.0, y)])
+                                                intersect = poly.intersection(slice_line)
+                                                if intersect and not intersect.is_empty:
+                                                    slice_points.append([intersect.centroid.x, y])
+                                            # Sort south to north
+                                            slice_points.sort(key=lambda pt: pt[1])
+                                            
+                                        if len(slice_points) >= 2:
+                                            lines.append(slice_points)
+                                            print(f"[OFFLINE GIS] Extracted spine centerline for polygon natural boundary with {len(slice_points)} points.", flush=True)
+                                except Exception as e:
+                                    print(f"[OFFLINE GIS] Failed to extract spine centerline for polygon: {e}", flush=True)
                                             
         if lines:
             print(f"[OFFLINE GIS] Successfully located natural boundary '{name}' in local datasets. Segments: {len(lines)}", flush=True)
