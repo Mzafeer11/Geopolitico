@@ -532,11 +532,17 @@ def _run_conquest_sim(
         )
         
     if stage_num == 2 and baselines_override_real:
+        stage1_real = context_val.get("stage1_real_conquests_str", "")
         target_instructions += (
-            "\nCRITICAL STAGE 2 MOMENTUM INSTRUCTIONS:\n"
-            "- You achieved a major victory in the previous Stage 1 conflict (Constantinople). You start this stage with that expanded territory. "
-            "Your military morale, resources, and power are extremely high. "
-            "Your conquests in this stage MUST reflect this increased power and momentum. Be ambitious and push borders significantly!"
+            f"\nCRITICAL STAGE 2 MOMENTUM INSTRUCTIONS:\n"
+            f"- You achieved a major victory in the previous Stage 1 conflict (Constantinople). You start this stage with that expanded territory. "
+            f"Your military morale, resources, and power are extremely high. "
+            f"Your conquests in this stage MUST reflect this increased power and momentum. Be ambitious and push borders significantly!\n"
+            f"CRITICAL COMPLEMENTARY LOSS INSTRUCTIONS FOR DEFEATED PARTIES:\n"
+            f"- In Stage 1, the following territories were conquered from their original owners:\n{stage1_real}"
+            f"- Defeated parties (like Byzantine Empire) have LOST these territories. In your JSON response, you MUST "
+            f"reduce the territories of these defeated parties accordingly. Do NOT let the Byzantine Empire claim or "
+            f"absorb Turkey, Constantinople, or Greece, as those are now owned by the Umayyad Caliphate!"
         )
         
     template_real = _load_prompt_template("expansion_conquest.txt")
@@ -610,10 +616,19 @@ def _run_conquest_sim(
         prompt_vars["target_instructions"] = target_instructions.format(year=year_val)
         
         if stage_num == 2 and baselines_override_opt:
+            stage1_opt = context_val.get("stage1_opt_conquests_str", "")
             prompt_vars["real_conquests_context"] = (
                 "\nSTAGE 1 OPTIMISTIC VICTORY ACHIEVED AND INCORPORATED:\n"
                 "- The Stage 1 conflict was won under best-case scenarios. You start Stage 2 with these fully expanded borders.\n"
                 f"REALISTIC STAGE 2 BASELINE (YOU MUST INCLUDE AND EXPAND ON THESE):\n{real_conquests_str}"
+            )
+            # Add loss instructions to target_instructions for Stage 2 Optimistic
+            prompt_vars["target_instructions"] += (
+                f"\nCRITICAL COMPLEMENTARY LOSS INSTRUCTIONS FOR DEFEATED PARTIES:\n"
+                f"- In Stage 1, the following territories were conquered from their original owners:\n{stage1_opt}"
+                f"- Defeated parties (like Byzantine Empire) have LOST these territories. In your JSON response, you MUST "
+                f"reduce the territories of these defeated parties accordingly. Do NOT let the Byzantine Empire claim or "
+                f"absorb Turkey, Constantinople, or Greece, as those are now owned by the Umayyad Caliphate!"
             )
         else:
             prompt_vars["real_conquests_context"] = f"\nREALISTIC CONQUESTS ACHIEVED (YOU MUST INCLUDE ALL OF THESE AS A BASELINE AND THEN EXPAND SUBSTANTIALLY UPON THEM):\n{real_conquests_str}"
@@ -1060,6 +1075,37 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         context_1["compounding_resolved_geoms"] = resolved_opt_1
         _process_territory_definitions(res_opt_1.territories, year_1, context_1)
         
+        # Build Stage 1 conquests summaries to pass to Stage 2
+        real_conquests_str_1 = ""
+        for t in res_real_1.territories:
+            conquest_parts = []
+            for p in t.partial_countries:
+                if p.clip_method == "natural_boundary" and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_direction} of {p.clip_description})")
+                elif p.clip_method in ["coordinate_latitude", "coordinate_longitude"] and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_description})")
+                elif p.provinces:
+                    conquest_parts.append(f"{p.country} (provinces: {', '.join(p.provinces)})")
+            if t.countries_absorbed:
+                conquest_parts.append(f"Fully absorbed countries: {', '.join(t.countries_absorbed)}")
+            if conquest_parts:
+                real_conquests_str_1 += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
+                
+        opt_conquests_str_1 = ""
+        for t in res_opt_1.territories:
+            conquest_parts = []
+            for p in t.partial_countries:
+                if p.clip_method == "natural_boundary" and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_direction} of {p.clip_description})")
+                elif p.clip_method in ["coordinate_latitude", "coordinate_longitude"] and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_description})")
+                elif p.provinces:
+                    conquest_parts.append(f"{p.country} (provinces: {', '.join(p.provinces)})")
+            if t.countries_absorbed:
+                conquest_parts.append(f"Fully absorbed countries: {', '.join(t.countries_absorbed)}")
+            if conquest_parts:
+                opt_conquests_str_1 += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
+        
         # --- STAGE 2 (Second Event) ---
         print(f"[SIMULATOR] --- STAGE 2: Simulating second event '{scenario_2}' at {year_2} ---", flush=True)
         
@@ -1067,6 +1113,8 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         context_2["year"] = year_2
         context_2["scenario"] = scenario_2
         context_2["simulation_mode"] = "expansion_conquest"
+        context_2["stage1_real_conquests_str"] = real_conquests_str_1
+        context_2["stage1_opt_conquests_str"] = opt_conquests_str_1
         
         # Execute Stage 2 with baselines overrides from Stage 1
         res_real_2, res_opt_2, realistic_features_2, optimistic_features_2 = _run_conquest_sim(
@@ -1291,7 +1339,10 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                         prov_geom = shape(feats[0]["geometry"])
                         polity_additions_shapes[t.name].append(prov_geom)
                         
-        for p in t.partial_countries:
+        # Prioritize absorbed countries: ignore partial definition if country is fully absorbed
+        absorbed_set = {c.lower() for c in getattr(t, "countries_absorbed", [])}
+        filtered_partials = [p for p in t.partial_countries if p.country.lower() not in absorbed_set]
+        for p in filtered_partials:
             print(f"[DEBUG]   Loading sub-provinces for country: '{p.country}'...", flush=True)
             
             # Check if this region uses natural boundary or coordinate clipping instead of lists
@@ -1761,10 +1812,19 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
         compounding_resolved = context.get("compounding_resolved_geoms")
         if compounding_resolved is not None:
             compounding_resolved.clear()
+            baseline_polities = context.get("baseline_polities", [])
             for item in resolved_territories:
                 t = item["definition"]
+                # Resolve actual_name
+                actual_name = t.name
+                if actual_name not in baseline_polities:
+                    for bp in baseline_polities:
+                        if bp.lower() in t.name.lower() or t.name.lower() in bp.lower():
+                            actual_name = bp
+                            break
                 final_sh = item["final_geom"]
                 if final_sh and not final_sh.is_empty:
                     compounding_resolved[t.name] = final_sh
+                    compounding_resolved[actual_name] = final_sh
         
     return features
