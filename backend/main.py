@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.simulation_engine import simulate_start, simulate_step, simulate_resume
+from backend.simulation_engine import simulate_start, simulate_step, simulate_verify
 from backend.config import FRONTEND_DIR, DATA_DIR
 
 app = FastAPI(
@@ -33,9 +33,9 @@ class SimulationRequest(BaseModel):
     scenario: str
     token: Optional[str] = ""
 
-class ResumeRequest(BaseModel):
+class VerifyRequest(BaseModel):
     session_id: str
-    answers: Dict[str, str]
+    selections: Dict[str, str]
 
 
 class InteractiveRequest(BaseModel):
@@ -51,11 +51,12 @@ def run_simulate_start_background(job_id: str, scenario: str):
             "progress": "Analyzing geopolitical counterfactual context..."
         }
         res = simulate_start(scenario)
-        if res.get("status") == "awaiting_clarification":
+        if res.get("status") == "awaiting_verification":
             jobs_store[job_id] = {
-                "status": "awaiting_clarification",
-                "progress": "Awaiting user selection of key geopolitical outcomes",
+                "status": "awaiting_verification",
+                "progress": "Awaiting user verification of geopolitical anomalies",
                 "questions": res["questions"],
+                "result": res["result"],
                 "session_id": res["session_id"]
             }
         else:
@@ -74,15 +75,14 @@ def run_simulate_start_background(job_id: str, scenario: str):
             "error": str(e)
         }
 
-def run_simulate_resume_background(job_id: str, session_id: str, answers: Dict[str, str]):
-    """Resume the simulation pipeline in the background with user options."""
+def run_simulate_verify_background(job_id: str, session_id: str, selections: Dict[str, str]):
+    """Finalize the simulation in the background with user validation selections."""
     try:
         jobs_store[job_id] = {
             "status": "running",
-            "progress": "Executing simulation model with selected outcomes..."
+            "progress": "Finalizing boundaries with selected validation edits..."
         }
-        from backend.simulation_engine import simulate_resume
-        res = simulate_resume(session_id, answers)
+        res = simulate_verify(session_id, selections)
         jobs_store[job_id] = {
             "status": "completed",
             "progress": "Simulation complete",
@@ -91,7 +91,7 @@ def run_simulate_resume_background(job_id: str, session_id: str, answers: Dict[s
         }
     except Exception as e:
         trace = traceback.format_exc()
-        print(f"[ERR] Resume simulation failed for job {job_id}: {e}\n{trace}")
+        print(f"[ERR] Verify simulation failed for job {job_id}: {e}\n{trace}")
         jobs_store[job_id] = {
             "status": "failed",
             "progress": f"Error: {str(e)}",
@@ -153,14 +153,15 @@ async def interactive_step(req: InteractiveRequest, background_tasks: Background
         
     background_tasks.add_task(run_simulate_step_background, job_id, req.session_id, req.message)
     return {"job_id": job_id, "status": "queued"}
-@app.post("/api/simulate/resume")
-async def simulate_resume(req: ResumeRequest, background_tasks: BackgroundTasks):
-    """Resume a simulation job with user clarified outcomes."""
+
+
+@app.post("/api/simulate/verify")
+async def simulate_verify(req: VerifyRequest, background_tasks: BackgroundTasks):
+    """Finalize job with validation selections."""
     import uuid
     job_id = str(uuid.uuid4())
-    background_tasks.add_task(run_simulate_resume_background, job_id, req.session_id, req.answers)
+    background_tasks.add_task(run_simulate_verify_background, job_id, req.session_id, req.selections)
     return {"job_id": job_id, "status": "queued"}
-
 
 
 @app.get("/api/status/{job_id}")

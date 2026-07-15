@@ -14,9 +14,3 @@ IMPORTANT SCENARIO SPECIFIC RULES:
 - If the prompt involves the "Chenab Formula", the baseline year MUST be set to 1960, the target region MUST be "Kashmir", target_countries MUST be ['India', 'Pakistan'], and baseline_polities MUST be ['India', 'Pakistan'].
 - If the prompt involves the "Balkan Wars" or the Ottoman Empire in the "1912 Balkan War", the baseline year MUST be set to 1911 to ensure the pre-war Ottoman boundaries (including Albania, Macedonia, and Thrace) are loaded.
 
-CLARIFYING QUESTIONS RULES:
-- You MUST generate 2-4 clarifying multiple choice questions under the 'clarifying_questions' field to let the user select strategic choices.
-- You must create at least one question with 'scenario_type': 'realistic' and one with 'scenario_type': 'optimistic'.
-- For 'realistic' questions, provide conservative options (e.g., stopping at local defensive lines, minor border adjustments, or keeping the baseline).
-- For 'optimistic' questions, provide generous options (e.g., pushing to major natural boundaries, full annexation of key regions, or massive territorial expansion).
-- Use clear options and assign a unique snake_case 'id' to each question. Set 'needs_clarification' to True.

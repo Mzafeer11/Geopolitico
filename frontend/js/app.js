@@ -18,43 +18,55 @@ function bindEvents() {
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
     const modeRiversBtn = document.getElementById("mode-rivers");
-    const submitClarificationBtn = document.getElementById("submit-clarification-btn");
+    const submitValidationBtn = document.getElementById("submit-validation-btn");
 
-    if (submitClarificationBtn) {
-        submitClarificationBtn.addEventListener("click", () => {
-            const answers = {};
-            const selects = document.querySelectorAll("#clarification-questions-container select");
-            selects.forEach(sel => {
-                const qId = sel.id.replace("q-", "");
-                answers[qId] = sel.value;
+    if (submitValidationBtn) {
+        submitValidationBtn.addEventListener("click", () => {
+            const selections = {};
+            const cards = document.querySelectorAll(".validation-anomaly-card");
+            let missing = false;
+            
+            cards.forEach(card => {
+                const anomalyId = card.dataset.id;
+                const checkedRadio = card.querySelector(`input[name="opt-${anomalyId}"]:checked`);
+                if (checkedRadio) {
+                    selections[anomalyId] = checkedRadio.value;
+                } else {
+                    missing = true;
+                }
             });
             
-            showPanel("loading-section");
-            document.getElementById("active-agent-display").innerText = "Resuming simulation with custom parameters...";
-            document.getElementById("progress-details-display").innerText = "Executing realistic and optimistic conquest models...";
+            if (missing) {
+                showToast("Please resolve all geopolitical anomalies before proceeding.", "error");
+                return;
+            }
             
-            fetch("/api/simulate/resume", {
+            showPanel("loading-section");
+            document.getElementById("active-agent-display").innerText = "Applying verification border decisions...";
+            document.getElementById("progress-details-display").innerText = "Regenerating final maps and boundaries...";
+            
+            fetch("/api/simulate/verify", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
                     session_id: currentSessionId,
-                    answers: answers
+                    selections: selections
                 })
             })
             .then(res => {
-                if (!res.ok) throw new Error("Failed to resume simulation");
+                if (!res.ok) throw new Error("Failed to verify boundaries");
                 return res.json();
             })
             .then(data => {
-                showToast("Parameters submitted. Queuing simulation...", "success");
+                showToast("Verifying border changes...", "success");
                 pollJobStatus(data.job_id);
             })
             .catch(err => {
                 console.error(err);
                 showToast(err.message, "error");
-                showPanel("clarification-section");
+                showPanel("validation-choice-section");
             });
         });
     }
@@ -179,10 +191,12 @@ function pollJobStatus(jobId) {
                 clearInterval(pollInterval);
                 currentSessionId = job.session_id; // Store globally
                 displayResults(job.result);
-            } else if (job.status === "awaiting_clarification") {
+            } else if (job.status === "awaiting_verification") {
                 clearInterval(pollInterval);
                 currentSessionId = job.session_id; // Store globally
-                displayClarificationQuestions(job.questions);
+                displayResults(job.result);
+                showPanel("validation-choice-section");
+                displayValidationQuestions(job.questions);
             } else if (job.status === "failed") {
                 clearInterval(pollInterval);
                 showToast(`Simulation failed: ${job.error}`, "error");
@@ -198,54 +212,169 @@ function pollJobStatus(jobId) {
     }, 2000);
 }
 
-function displayClarificationQuestions(questions) {
-    showPanel("clarification-section");
-    const container = document.getElementById("clarification-questions-container");
+let validationHighlightLayer = null;
+
+function showValidationHighlight(geojson) {
+    if (validationHighlightLayer && map) {
+        map.removeLayer(validationHighlightLayer);
+        validationHighlightLayer = null;
+    }
+    if (!geojson || !geojson.features || geojson.features.length === 0 || !map) return;
+    
+    validationHighlightLayer = L.geoJSON(geojson, {
+        style: (feature) => {
+            const color = feature.properties.color || "#2ecc71";
+            return {
+                fillColor: color,
+                weight: 3,
+                opacity: 0.9,
+                color: color,
+                fillOpacity: 0.6,
+                dashArray: "4, 4"
+            };
+        }
+    }).addTo(map);
+    
+    try {
+        const bounds = validationHighlightLayer.getBounds();
+        if (bounds.isValid()) {
+            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 8 });
+        }
+    } catch(e) {
+        console.error(e);
+    }
+}
+
+function clearValidationHighlight() {
+    if (validationHighlightLayer && map) {
+        map.removeLayer(validationHighlightLayer);
+        validationHighlightLayer = null;
+    }
+}
+
+function displayValidationQuestions(questions) {
+    const container = document.getElementById("validation-questions-container");
     container.innerHTML = "";
     
-    // Categorize questions
-    const realisticQuestions = questions.filter(q => q.scenario_type === "realistic");
-    const optimisticQuestions = questions.filter(q => q.scenario_type === "optimistic");
-    const generalQuestions = questions.filter(q => q.scenario_type !== "realistic" && q.scenario_type !== "optimistic");
-    
-    if (realisticQuestions.length > 0) {
-        const header = document.createElement("h3");
-        header.style.color = "#fbbf24";
-        header.style.fontSize = "12px";
-        header.style.fontWeight = "600";
-        header.style.marginTop = "10px";
-        header.style.textTransform = "uppercase";
-        header.innerText = "🔍 Realistic Scenario Parameters";
-        container.appendChild(header);
+    questions.forEach(q => {
+        const card = document.createElement("div");
+        card.className = "validation-anomaly-card";
+        card.dataset.id = q.id;
+        card.style.background = "rgba(255,255,255,0.03)";
+        card.style.border = "1px solid rgba(255,255,255,0.1)";
+        card.style.borderRadius = "8px";
+        card.style.padding = "15px";
+        card.style.marginBottom = "15px";
         
-        realisticQuestions.forEach(q => renderQuestion(q, container));
-    }
-    
-    if (optimisticQuestions.length > 0) {
-        const header = document.createElement("h3");
-        header.style.color = "#2ecc71";
-        header.style.fontSize = "12px";
-        header.style.fontWeight = "600";
-        header.style.marginTop = "15px";
-        header.style.textTransform = "uppercase";
-        header.innerText = "⚡ Optimistic Scenario Parameters (Generous)";
-        container.appendChild(header);
+        const typeLabel = q.scenario_type === "realistic" ? "🔍 Realistic Anomaly" : "⚡ Optimistic Anomaly";
+        const typeColor = q.scenario_type === "realistic" ? "#fbbf24" : "#2ecc71";
         
-        optimisticQuestions.forEach(q => renderQuestion(q, container));
-    }
-    
-    if (generalQuestions.length > 0) {
-        const header = document.createElement("h3");
-        header.style.color = "#a78bfa";
-        header.style.fontSize = "12px";
-        header.style.fontWeight = "600";
-        header.style.marginTop = "15px";
+        const header = document.createElement("h4");
+        header.style.color = typeColor;
+        header.style.fontSize = "11px";
+        header.style.fontWeight = "700";
         header.style.textTransform = "uppercase";
-        header.innerText = "⚙️ General Parameters";
-        container.appendChild(header);
+        header.style.marginBottom = "5px";
+        header.innerText = typeLabel;
+        card.appendChild(header);
         
-        generalQuestions.forEach(q => renderQuestion(q, container));
-    }
+        const desc = document.createElement("p");
+        desc.style.fontSize = "12px";
+        desc.style.marginBottom = "15px";
+        desc.style.color = "#e2e8f0";
+        desc.innerText = q.issue_description;
+        card.appendChild(desc);
+        
+        // Option 1 Container (Addition - Green)
+        const opt1Group = document.createElement("div");
+        opt1Group.style.marginBottom = "10px";
+        opt1Group.style.padding = "8px 12px";
+        opt1Group.style.border = "1px dashed rgba(46, 204, 113, 0.3)";
+        opt1Group.style.borderRadius = "6px";
+        opt1Group.style.cursor = "pointer";
+        opt1Group.style.background = "rgba(46, 204, 113, 0.03)";
+        opt1Group.className = "anomaly-option-row";
+        
+        const radio1 = document.createElement("input");
+        radio1.type = "radio";
+        radio1.name = `opt-${q.id}`;
+        radio1.value = "option_1";
+        radio1.id = `opt1-${q.id}`;
+        radio1.style.marginRight = "8px";
+        
+        const label1 = document.createElement("label");
+        label1.htmlFor = `opt1-${q.id}`;
+        label1.style.fontSize = "12px";
+        label1.style.color = "#fff";
+        label1.style.cursor = "pointer";
+        label1.innerText = `Option 1 (Land Bridge): ${q.option_1.description}`;
+        
+        opt1Group.appendChild(radio1);
+        opt1Group.appendChild(label1);
+        
+        // Option 2 Container (Subtraction - Red)
+        const opt2Group = document.createElement("div");
+        opt2Group.style.padding = "8px 12px";
+        opt2Group.style.border = "1px dashed rgba(239, 68, 68, 0.3)";
+        opt2Group.style.borderRadius = "6px";
+        opt2Group.style.cursor = "pointer";
+        opt2Group.style.background = "rgba(239, 68, 68, 0.03)";
+        opt2Group.className = "anomaly-option-row";
+        
+        const radio2 = document.createElement("input");
+        radio2.type = "radio";
+        radio2.name = `opt-${q.id}`;
+        radio2.value = "option_2";
+        radio2.id = `opt2-${q.id}`;
+        radio2.style.marginRight = "8px";
+        
+        const label2 = document.createElement("label");
+        label2.htmlFor = `opt2-${q.id}`;
+        label2.style.fontSize = "12px";
+        label2.style.color = "#fff";
+        label2.style.cursor = "pointer";
+        label2.innerText = `Option 2 (Withdraw): ${q.option_2.description}`;
+        
+        opt2Group.appendChild(radio2);
+        opt2Group.appendChild(label2);
+        
+        // Hover listeners for highlights
+        opt1Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_1_geojson));
+        opt1Group.addEventListener("mouseleave", () => {
+            const checked = card.querySelector(`input[name="opt-${q.id}"]:checked`);
+            if (checked && checked.value === "option_1") {
+                showValidationHighlight(q.option_1_geojson);
+            } else if (checked && checked.value === "option_2") {
+                showValidationHighlight(q.option_2_geojson);
+            } else {
+                clearValidationHighlight();
+            }
+        });
+        opt1Group.addEventListener("click", () => {
+            radio1.checked = true;
+            showValidationHighlight(q.option_1_geojson);
+        });
+        
+        opt2Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_2_geojson));
+        opt2Group.addEventListener("mouseleave", () => {
+            const checked = card.querySelector(`input[name="opt-${q.id}"]:checked`);
+            if (checked && checked.value === "option_2") {
+                showValidationHighlight(q.option_2_geojson);
+            } else if (checked && checked.value === "option_1") {
+                showValidationHighlight(q.option_1_geojson);
+            } else {
+                clearValidationHighlight();
+            }
+        });
+        opt2Group.addEventListener("click", () => {
+            radio2.checked = true;
+            showValidationHighlight(q.option_2_geojson);
+        });
+        
+        card.appendChild(opt1Group);
+        card.appendChild(opt2Group);
+        container.appendChild(card);
+    });
 }
 
 function renderQuestion(q, container) {

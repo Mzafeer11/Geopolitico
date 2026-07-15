@@ -35,11 +35,24 @@ BOUNDARY_COUNTRIES_MAP = {
 
 # ─── Pydantic Output Schemas ──────────────────────────────────────────────────
 
-class ClarifyingQuestion(BaseModel):
-    id: str = Field(description="Unique snake_case identifier for this question (e.g. 'boundary_selection').")
-    question: str = Field(description="The question text to show the user.")
-    options: List[str] = Field(description="List of choices representing different geopolitical outcomes.")
-    scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this choice applies to the realistic (conservative) or optimistic (generous) scenario.")
+class EnclaveResolutionOption(BaseModel):
+    action: Literal["addition", "subtraction"] = Field(description="Whether this option adds connecting land bridge (addition) or pulls back/removes enclave (subtraction).")
+    description: str = Field(description="Explanation of the choice for the user (e.g. 'Annex European Turkey to create land bridge' or 'Withdraw from Greece').")
+    countries_absorbed: List[str] = Field(default=[], description="List of modern country names to add/remove.")
+    partial_countries: List[Any] = Field(default=[], description="List of PartialRegion definitions to add/remove.")
+    
+class ValidationAnomalyQuestion(BaseModel):
+    id: str = Field(description="Unique ID for this anomaly (e.g., 'greece_enclave').")
+    issue_description: str = Field(description="Description of the enclave/gap detected.")
+    scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this anomaly is in the realistic or optimistic result.")
+    option_1: EnclaveResolutionOption = Field(description="Option 1: Add connecting land bridge.")
+    option_2: EnclaveResolutionOption = Field(description="Option 2: Pull back and remove enclave.")
+    option_1_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated green highlight GeoJSON features for Option 1.")
+    option_2_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated red highlight GeoJSON features for Option 2.")
+
+class AnomalyCheckResult(BaseModel):
+    has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
+    questions: List[ValidationAnomalyQuestion] = Field(default=[], description="List of questions to resolve the detected enclaves.")
 
 
 class PlanningResult(BaseModel):
@@ -52,8 +65,6 @@ class PlanningResult(BaseModel):
     target_region: str = Field(description="The primary geographic region where the event takes place (e.g. 'Southern France', 'Kashmir').")
     target_countries: List[str] = Field(default=[], description="List of modern sovereign countries containing the conflict zone (e.g. ['France', 'Spain'] or ['India', 'Pakistan']).")
     baseline_description: str = Field(description="Brief explanation of the real-world historical context of the base year.")
-    needs_clarification: bool = Field(description="True if the prompt has significant branch decisions where user input is required.")
-    clarifying_questions: List[ClarifyingQuestion] = Field(default=[], description="List of 2-4 structured multiple choice questions to refine realistic (conservative options) and optimistic (generous options) parameters.")
 
 
 class SequentialScenarioPlan(BaseModel):
@@ -272,6 +283,108 @@ def _run_geopolitical_validation(
         return result
 
 
+def _check_geopolitical_anomalies(
+    result_real: ScenarioStateResult,
+    result_opt: ScenarioStateResult,
+    scenario: str,
+    year: int,
+    context: Dict[str, Any]
+) -> AnomalyCheckResult:
+    """Run validation LLM to detect major contiguity enclaves, and pre-calculate highlight GeoJSONs."""
+    try:
+        baseline_pols = context.get("baseline_polities", []) if context else []
+        winner_polity = baseline_pols[0] if baseline_pols else "Conqueror"
+        
+        template = _load_prompt_template("anomaly_checker.txt")
+        if not template:
+            print("[WARN] Anomaly checker template anomaly_checker.txt not found. Skipping.", flush=True)
+            return AnomalyCheckResult(has_anomalies=False, questions=[])
+            
+        # Combine realistic and optimistic territories for the inspector
+        input_data = {
+            "realistic": [t.model_dump() for t in result_real.territories],
+            "optimistic": [t.model_dump() for t in result_opt.territories]
+        }
+        
+        prompt = template.format(
+            scenario=scenario,
+            year=year,
+            winner_polity=winner_polity,
+            territories_json=json.dumps(input_data, indent=2)
+        )
+        
+        print("[SIMULATOR] Launching Geopolitical Contiguity and Enclave Inspector...", flush=True)
+        checker_res: AnomalyCheckResult = _invoke_structured_with_fallback(
+            AnomalyCheckResult,
+            [SystemMessage(content=prompt)],
+            temperature=0.2
+        )
+        
+        if not checker_res.has_anomalies or not checker_res.questions:
+            print("[SIMULATOR] No major contiguity enclaves detected.", flush=True)
+            return AnomalyCheckResult(has_anomalies=False, questions=[])
+            
+        # Pre-calculate highlight GeoJSON features for each option
+        print(f"[SIMULATOR] Detected {len(checker_res.questions)} major anomalies. Pre-calculating highlight layers...", flush=True)
+        for q in checker_res.questions:
+            # Option 1: Addition (Green)
+            opt1 = q.option_1
+            feat_list_1 = []
+            if opt1.countries_absorbed or opt1.partial_countries:
+                pc_list = []
+                for pc in opt1.partial_countries:
+                    if isinstance(pc, dict):
+                        pc_list.append(PartialRegion(**pc))
+                    else:
+                        pc_list.append(pc)
+                # Create a temporary territory to compile
+                t_mock = TerritoryChange(
+                    name=winner_polity,
+                    type="empire",
+                    color="#2ecc71",
+                    countries_absorbed=opt1.countries_absorbed,
+                    partial_countries=pc_list,
+                    description=opt1.description
+                )
+                feats = _process_territory_definitions([t_mock], year, context)
+                for f in feats:
+                    f["properties"]["color"] = "#2ecc71"
+                    f["properties"]["description"] = f"Proposed Addition: {opt1.description}"
+                feat_list_1 = feats
+            q.option_1_geojson = {"type": "FeatureCollection", "features": feat_list_1}
+            
+            # Option 2: Subtraction (Red)
+            opt2 = q.option_2
+            feat_list_2 = []
+            if opt2.countries_absorbed or opt2.partial_countries:
+                pc_list = []
+                for pc in opt2.partial_countries:
+                    if isinstance(pc, dict):
+                        pc_list.append(PartialRegion(**pc))
+                    else:
+                        pc_list.append(pc)
+                t_mock = TerritoryChange(
+                    name=winner_polity,
+                    type="empire",
+                    color="#ef4444",
+                    countries_absorbed=opt2.countries_absorbed,
+                    partial_countries=pc_list,
+                    description=opt2.description
+                )
+                feats = _process_territory_definitions([t_mock], year, context)
+                for f in feats:
+                    f["properties"]["color"] = "#ef4444"
+                    f["properties"]["description"] = f"Proposed Subtraction: {opt2.description}"
+                feat_list_2 = feats
+            q.option_2_geojson = {"type": "FeatureCollection", "features": feat_list_2}
+            
+        return checker_res
+    except Exception as e:
+        print(f"[WARN] Geopolitical Anomaly Inspector failed: {e}", flush=True)
+        traceback.print_exc()
+        return AnomalyCheckResult(has_anomalies=False, questions=[])
+
+
 # ─── Spatial Contest Finder ──────────────────────────────────────────────────
 
 def find_contested_provinces(polities: List[str], year: int, target_countries: Optional[List[str]] = None, is_partition: bool = False) -> List[str]:
@@ -477,16 +590,7 @@ Ensure both years are realistic and match the historical conflicts."""
         # Override the base context year to year_1 initially
         context["year"] = split_plan.year_1
         
-    context["clarifying_questions"] = [q.model_dump() for q in plan.clarifying_questions]
     _sessions[session_id] = context
-    
-    if plan.clarifying_questions:
-        print(f"[SIMULATOR] Pausing simulation for {len(plan.clarifying_questions)} clarifying questions...", flush=True)
-        return {
-            "status": "awaiting_clarification",
-            "session_id": session_id,
-            "questions": context["clarifying_questions"]
-        }
         
     # Proceed directly to final simulation if no questions
     res = _run_final_simulation(context, answers=None)
@@ -500,15 +604,122 @@ Ensure both years are realistic and match the historical conflicts."""
     return res
 
 
-def simulate_resume(session_id: str, answers: Dict[str, str]) -> Dict[str, Any]:
-    """Resume the simulation pipeline using user answered parameters."""
+def simulate_verify(session_id: str, selections: Dict[str, str]) -> Dict[str, Any]:
+    """Apply the user's validation selections (Option 1: additions or Option 2: subtractions) to territories and finalize."""
     context = _sessions.get(session_id)
     if not context:
         raise ValueError("Invalid or expired session ID.")
         
-    res = _run_final_simulation(context, answers=answers)
-    res["session_id"] = session_id
-    return res
+    pending_real = context.get("pending_real_result")
+    pending_opt = context.get("pending_opt_result")
+    anomalies = context.get("anomalies", [])
+    
+    if not pending_real or not pending_opt:
+        raise ValueError("No pending validation states found for this session.")
+        
+    # Reconstruct ScenarioStateResult objects from dicts
+    res_real = ScenarioStateResult(**pending_real)
+    res_opt = ScenarioStateResult(**pending_opt)
+    
+    baseline_pols = context.get("baseline_polities", [])
+    winner_polity_name = baseline_pols[0] if baseline_pols else "Conqueror"
+    
+    # Process each user selection
+    for anomaly in anomalies:
+        anomaly_id = anomaly.get("id")
+        choice = selections.get(anomaly_id) # 'option_1' or 'option_2'
+        if not choice:
+            continue
+            
+        opt_data = anomaly.get(choice)
+        if not opt_data:
+            continue
+            
+        action = opt_data.get("action") # 'addition' or 'subtraction'
+        countries_abs = opt_data.get("countries_absorbed", [])
+        partial_countries_list = opt_data.get("partial_countries", [])
+        scenario_type = anomaly.get("scenario_type") # 'realistic' or 'optimistic'
+        
+        # Determine target state
+        target_res = res_real if scenario_type == "realistic" else res_opt
+        
+        # Find conqueror's territory change
+        winner_t = None
+        for t in target_res.territories:
+            if winner_polity_name.lower() in t.name.lower() or t.name.lower() in winner_polity_name.lower():
+                winner_t = t
+                break
+        else:
+            if target_res.territories:
+                winner_t = target_res.territories[0]
+                
+        if not winner_t:
+            continue
+            
+        if action == "addition":
+            for country in countries_abs:
+                if country not in winner_t.countries_absorbed:
+                    winner_t.countries_absorbed.append(country)
+            for part in partial_countries_list:
+                part_reg = PartialRegion(**part) if isinstance(part, dict) else part
+                # Check if country already exists in winner's partial list
+                existing = None
+                for p in winner_t.partial_countries:
+                    if p.country == part_reg.country:
+                        existing = p
+                        break
+                if existing:
+                    for prov in part_reg.provinces:
+                        if prov not in existing.provinces:
+                            existing.provinces.append(prov)
+                else:
+                    winner_t.partial_countries.append(part_reg)
+                    
+        elif action == "subtraction":
+            for country in countries_abs:
+                if country in winner_t.countries_absorbed:
+                    winner_t.countries_absorbed.remove(country)
+            for part in partial_countries_list:
+                part_reg = PartialRegion(**part) if isinstance(part, dict) else part
+                # Find matching country in winner's list
+                existing = None
+                for p in winner_t.partial_countries:
+                    if p.country == part_reg.country:
+                        existing = p
+                        break
+                if existing:
+                    if not part_reg.provinces:
+                        # Remove entire country entry if no specific provinces list is provided
+                        winner_t.partial_countries.remove(existing)
+                    else:
+                        for prov in part_reg.provinces:
+                            if prov in existing.provinces:
+                                existing.provinces.remove(prov)
+                        if not existing.provinces:
+                            winner_t.partial_countries.remove(existing)
+                            
+    # Finalize the subtractive borders and compile the GeoJSON geometries
+    print("[SIMULATOR] Finalizing validation borders after user selections...", flush=True)
+    year = context["year"]
+    
+    realistic_features = _process_territory_definitions(res_real.territories, year, context)
+    optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
+    
+    # Run _run_final_simulation with answers=None to compile standard timeline/narrative result structure
+    final_res = _run_final_simulation(context, answers=None)
+    
+    # Override the features in final result with our validated/customized features!
+    if "result" in final_res:
+        final_res["result"]["geojson_after_realistic"] = {
+            "type": "FeatureCollection",
+            "features": realistic_features
+        }
+        final_res["result"]["geojson_after_optimistic"] = {
+            "type": "FeatureCollection",
+            "features": optimistic_features
+        }
+        
+    return final_res
 
 
 def simulate_step(session_id: str, message: str) -> Dict[str, Any]:
@@ -1327,6 +1538,35 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     results["osm_boundary_name"] = ", ".join(boundary_names) if boundary_names else "Natural Borders"
     results["map_markers"] = context.get("map_markers", [])
     
+    # 4. Check for major geopolitical anomalies (disconnected enclaves/gaps)
+    pending_real = None
+    pending_opt = None
+    if mode == "compounding_conquest":
+        if 'res_real_2' in locals() and 'res_opt_2' in locals():
+            pending_real = locals()['res_real_2']
+            pending_opt = locals()['res_opt_2']
+    elif mode in ["expansion_conquest", "demographic_shift"]:
+        if 'res_real' in locals() and 'res_opt' in locals():
+            pending_real = locals()['res_real']
+            pending_opt = locals()['res_opt']
+            
+    if pending_real and pending_opt:
+        checker = _check_geopolitical_anomalies(pending_real, pending_opt, scenario, year, context)
+        if checker.has_anomalies and checker.questions:
+            # Save state in context for simulate_verify
+            context["pending_real_result"] = pending_real.model_dump()
+            context["pending_opt_result"] = pending_opt.model_dump()
+            context["anomalies"] = [q.model_dump() for q in checker.questions]
+            _sessions[context["session_id"]] = context
+            
+            print(f"[SIMULATOR] Pausing simulation for user validation choice on {len(checker.questions)} anomalies...", flush=True)
+            return {
+                "status": "awaiting_verification",
+                "session_id": context["session_id"],
+                "questions": context["anomalies"],
+                "result": results
+            }
+            
     return {
         "status": "completed",
         "result": results
