@@ -16,7 +16,7 @@ IMPORTANT GEOGRAPHY RULES:
 3. CONQUER SPECIFIC SCENARIO TARGETS: Identify the key cities, battles, or regions mentioned in the scenario prompt (e.g. "sieges of Constantinople" or "Battle of Tours"). If the scenario states that a victory occurred there, you MUST annex those specific provinces (e.g., 'Istanbul (Turkey)' for Constantinople, and the relevant French provinces for Tours) to the victorious polity!
 4. GEOGRAPHIC CONTIGUITY: Ensure all annexed provinces form a logically contiguous geographic area extending outward from the baseline empire's borders. Do NOT generate random, isolated "patches" or "enclaves" of territory in the middle of enemy lands unless they are explicitly designated as client states or vassals.
 5. NO RENAMING: Keep the names of the empires exactly as they are in the parties list (e.g., 'Umayyad' or 'Kingdom of the Franks'). Do not invent new names.
-6. COMPLETE DATA: Output the complete updated territories for all parties after the conquests are resolved.
+6. COMPLETE DATA AND ALL PARTIES: You MUST output the complete updated territories for ALL parties listed in the 'Parties' field ({parties}). Even if a party was defeated, lost territory, or had no territorial changes, you MUST still include them in the 'territories' list and define their updated (or reduced) borders. Do NOT omit any party.
 7. NATURAL BOUNDARIES & VECTOR CLIPPING: Instead of manually listing dozens of individual provinces (which leads to blocky enclaves), you can use the vector clipping system:
    - Set 'clip_method' to 'natural_boundary' (or 'coordinate_latitude' / 'coordinate_longitude').
    - Set 'clip_description' to the name of the boundary (e.g., 'Loire River', 'Pyrenees', 'Alps', 'Danube River', 'Rhine River').
