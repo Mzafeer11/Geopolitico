@@ -756,6 +756,9 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
                 "(e.g., 'Loire River', 'Pyrenees', 'Alps', 'Rhine River', 'Bosphorus') to partition the country cleanly. "
                 "Leave the 'provinces' array empty '[]' when using natural boundaries. The engine will automatically "
                 "clip the entire country along the river/mountain range in that direction.\n"
+                "- GEOGRAPHIC CONTIGUITY & NO LEAPFROGGING: All conquests MUST form a single, contiguous block extending directly from the baseline empire's borders. "
+                "Do NOT leapfrog over unconquered land (for example, do NOT annex Bulgaria or Romania unless you also annex Greece, Thrace, and Constantinople, "
+                "as they lie in between). Avoid isolated enclaves or disconnected territory.\n"
                 "- If a specific key city was captured (like Constantinople or Tours), you may list its containing modern "
                 "province (e.g., 'Istanbul (Turkey)' for Constantinople) in the 'provinces' list to represent that city."
             )
@@ -1006,6 +1009,21 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
     
     for t in territories:
         print(f"[DEBUG] Processing territory definitions for '{t.name}'...", flush=True)
+        
+        # Load all provinces of fully absorbed countries as additions
+        for country_name in getattr(t, "countries_absorbed", []):
+            print(f"[DEBUG]   Loading fully absorbed country: '{country_name}'...", flush=True)
+            for feat_data in loader.provinces_data:
+                props = feat_data.get("properties", {})
+                admin_name = props.get("admin", "")
+                if admin_name.lower() == country_name.lower():
+                    pname = props.get("name")
+                    fullname = f"{pname} ({admin_name})"
+                    feats = loader.get_province_features(fullname, admin_name)
+                    if feats:
+                        prov_geom = shape(feats[0]["geometry"])
+                        polity_additions_shapes[t.name].append(prov_geom)
+                        
         for p in t.partial_countries:
             print(f"[DEBUG]   Loading sub-provinces for country: '{p.country}'...", flush=True)
             
