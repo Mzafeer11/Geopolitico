@@ -24,14 +24,21 @@ class PlanningResult(BaseModel):
     year: int = Field(description="The target base year of the simulation context.")
     parties: List[str] = Field(description="The primary historical/modern states/parties involved in the scenario (e.g. ['Umayyad Caliphate', 'Kingdom of the Franks']).")
     baseline_polities: List[str] = Field(description="The exact polity names in the Cliopatria dataset representing the starting baseline geography (e.g. ['British India'] or ['Umayyad Caliphate', 'Kingdom of the Franks']).")
-    simulation_mode: Literal["expansion_conquest", "proposal_partition", "demographic_shift"] = Field(
-        description="Mode of simulation: 'proposal_partition' for treaties/formulas, 'demographic_shift' for population changes, 'expansion_conquest' for military events."
+    simulation_mode: Literal["expansion_conquest", "proposal_partition", "demographic_shift", "compounding_conquest"] = Field(
+        description="Mode of simulation: 'proposal_partition' for treaties/formulas, 'demographic_shift' for population changes, 'expansion_conquest' for military events, 'compounding_conquest' for sequential compounding conflicts."
     )
     target_region: str = Field(description="The primary geographic region where the event takes place (e.g. 'Southern France', 'Kashmir').")
     target_countries: List[str] = Field(default=[], description="List of modern sovereign countries containing the conflict zone (e.g. ['France', 'Spain'] or ['India', 'Pakistan']).")
     baseline_description: str = Field(description="Brief explanation of the real-world historical context of the base year.")
     needs_clarification: bool = Field(description="True if the prompt has significant branch decisions where user input is required.")
     clarifying_questions: List[str] = Field(default=[], description="List of 2-3 multiple choice questions for the user to refine simulation parameters if needs_clarification is True.")
+
+
+class SequentialScenarioPlan(BaseModel):
+    scenario_1: str = Field(description="Counterfactual prompt for the first chronological event (e.g. Constantinople in 717 AD)")
+    year_1: int = Field(description="The year of the first event")
+    scenario_2: str = Field(description="Counterfactual prompt for the second chronological event (e.g. Tours in 732 AD)")
+    year_2: int = Field(description="The year of the second event")
 
 
 class SplitProvince(BaseModel):
@@ -316,7 +323,18 @@ Choose the simulation_mode based on keywords:
     has_partition = any(kw in scenario_lower for kw in ["treaty", "formula", "partition", "agreement", "division", "accord", "compromise"])
     has_demo = any(kw in scenario_lower for kw in ["population", "percentage", "demographic", "majority", "minority"])
     
-    if not has_partition and not has_demo:
+    # Check for compounding conquest (multiple years or multiple target conflicts in ancient contexts)
+    import re
+    years = [int(y) for y in re.findall(r'\b\d{3,4}\b', refined_scenario)]
+    plausible_years = [y for y in years if 500 <= y <= 2000]
+    has_multiple_dates = len(set(plausible_years)) >= 2
+    has_multiple_events = "constantinople" in scenario_lower and ("tours" in scenario_lower or "poitiers" in scenario_lower)
+    
+    is_compounding = (has_multiple_dates or has_multiple_events) and not has_partition and not has_demo
+    
+    if is_compounding:
+        plan.simulation_mode = "compounding_conquest"
+    elif not has_partition and not has_demo:
         plan.simulation_mode = "expansion_conquest"
     elif has_demo and not has_partition:
         plan.simulation_mode = "demographic_shift"
@@ -334,6 +352,30 @@ Choose the simulation_mode based on keywords:
         "baseline_description": plan.baseline_description
     }
     
+    if plan.simulation_mode == "compounding_conquest":
+        # Call LLM to split the scenario into two sequential steps
+        split_prompt = f"""You are a chronological timeline planner.
+The user wants to simulate a compound counterfactual scenario involving multiple sequential events:
+"{refined_scenario}"
+
+Please split this scenario into two distinct chronological steps:
+1. scenario_1: A counterfactual prompt focusing solely on the first historical conflict/event (e.g. Siege of Constantinople in 717-718 AD).
+2. year_1: The year of this first conflict.
+3. scenario_2: A counterfactual prompt focusing solely on the second historical conflict/event (e.g. Battle of Tours in 732 AD).
+4. year_2: The year of this second conflict.
+
+Ensure both years are realistic and match the historical conflicts."""
+        
+        split_plan: SequentialScenarioPlan = _invoke_structured_with_fallback(
+            SequentialScenarioPlan,
+            [SystemMessage(content=split_prompt)],
+            temperature=0.2
+        )
+        print(f"[SIMULATOR] Compounding scenario plan generated: Stage 1 = '{split_plan.scenario_1}' in {split_plan.year_1}, Stage 2 = '{split_plan.scenario_2}' in {split_plan.year_2}", flush=True)
+        context["compounding_plan"] = split_plan.model_dump()
+        # Override the base context year to year_1 initially
+        context["year"] = split_plan.year_1
+        
     _sessions[session_id] = context
     
     # Proceed directly to final simulation
@@ -364,6 +406,253 @@ def simulate_step(session_id: str, message: str) -> Dict[str, Any]:
     # Save updated context back
     _sessions[session_id] = context
     return res
+
+
+def _run_conquest_sim(
+    scenario_val: str,
+    year_val: int,
+    context_val: dict,
+    stage_num: int = 1,
+    baselines_override_real: dict = None,
+    baselines_override_opt: dict = None
+):
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    
+    baseline_polities = context_val.get("baseline_polities", [])
+    target_countries = context_val.get("target_countries", [])
+    
+    restricted_countries = target_countries if target_countries else [
+        "France", "Spain", "Italy", "Switzerland", "Germany", "Greece", "Bulgaria", "Turkey",
+        "Belgium", "Netherlands", "Luxembourg", "Austria", "Andorra", "Portugal", "Morocco",
+        "Slovenia", "Poland", "Czechia", "Denmark", "Middle East", "Albania", "North Macedonia",
+        "Syria", "Iraq", "Iran", "Armenia", "Georgia", "Azerbaijan"
+    ]
+    
+    loader = CountryPolygonLoader()
+    print(f"[SIMULATOR] (Stage {stage_num}) Locating contested provinces for baseline polities {baseline_polities} in {year_val} AD...", flush=True)
+    
+    contested_provinces = find_contested_provinces(baseline_polities, year_val, target_countries, is_partition=False)
+    
+    # Calculate baseline province ownership
+    print(f"[SIMULATOR] (Stage {stage_num}) Analyzing baseline territorial ownership...", flush=True)
+    baseline_ownership = {polity: [] for polity in baseline_polities}
+    polity_shapes = {}
+    for polity in baseline_polities:
+        if stage_num == 2 and baselines_override_real and polity in baselines_override_real:
+            polity_shapes[polity] = baselines_override_real[polity]
+        else:
+            feat = cliopatria_db.get_polity_geometry(polity, year_val)
+            if feat and feat.get("geometry"):
+                try:
+                    polity_shapes[polity] = shape(feat["geometry"])
+                except Exception:
+                    pass
+                    
+    for prov_name in contested_provinces:
+        for f in loader.provinces_data:
+            props = f.get("properties", {})
+            pname = props.get("name")
+            admin = props.get("admin")
+            if f"{pname} ({admin})" == prov_name:
+                geom_dict = f.get("geometry")
+                if geom_dict:
+                    try:
+                        prov_sh = shape(geom_dict)
+                        for polity, p_geom in polity_shapes.items():
+                            is_owner = False
+                            try:
+                                intersection_area = prov_sh.intersection(p_geom).area
+                                if intersection_area > 0.5 * prov_sh.area:
+                                    is_owner = True
+                            except Exception:
+                                if prov_sh.centroid.within(p_geom):
+                                    is_owner = True
+                            if is_owner:
+                                baseline_ownership[polity].append(prov_name)
+                    except Exception:
+                        pass
+                break
+                
+    is_ancient_conquest = (year_val < 1800)
+    
+    if is_ancient_conquest:
+        ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
+        for polity, provs in baseline_ownership.items():
+            countries_controlled = sorted(list(set(prov.split('(')[-1].replace(')', '').strip() for prov in provs)))
+            ownership_str += f"- {polity} currently controls territory within the following modern countries: {', '.join(countries_controlled) if countries_controlled else 'None'}\n"
+        
+        prompt_contested = f"Contested provinces are located within the following modern countries: {', '.join(sorted(target_countries) if target_countries else sorted(restricted_countries))}. Since this is an ancient/medieval scenario (< 1800 AD), do NOT attempt to annex modern administrative provinces individually. Instead, define your conquests using whole countries, or use the natural boundary vector clipping system (e.g. Loire River, Pyrenees, Alps, Rhine River) with empty provinces array '[]' to draw smooth natural borders. The only exception is capturing a famous capital city, in which case you can annex its modern province (e.g. 'Istanbul (Turkey)' for Constantinople)."
+    else:
+        ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
+        for polity, provs in baseline_ownership.items():
+            if len(provs) > 15:
+                ownership_str += f"- {polity} currently controls {len(provs)} provinces including: {', '.join(provs[:15])} ... [and {len(provs) - 15} more]\n"
+            else:
+                ownership_str += f"- {polity} currently controls: {', '.join(provs) if provs else 'None'}\n"
+        prompt_contested = contested_provinces
+        if isinstance(prompt_contested, list) and len(prompt_contested) > 30:
+            prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
+            
+    prompt_vars = {
+        "scenario": scenario_val,
+        "year": year_val,
+        "parties": context_val.get("parties", []),
+        "ownership_str": ownership_str,
+        "contested_provinces": prompt_contested,
+        "answers_str": "",
+        "demographics_context": ""
+    }
+    
+    scenario_lower = scenario_val.lower()
+    targets = []
+    if "constantinople" in scenario_lower:
+        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. You MUST also annex Anatolia/Turkey: add a partial_country for Turkey, setting 'clip_method: natural_boundary', 'clip_description: Bosphorus', and 'clip_direction: south_of_natural_boundary' (or list the provinces).")
+    if "tours" in scenario_lower or "poitiers" in scenario_lower:
+        targets.append("- The Battle of Tours was won. Therefore, you MUST annex key French provinces (such as 'Vienne (France)', 'Indre (France)', 'Indre-et-Loire (France)', 'Haute-Vienne (France)', 'Deux-Sèvres (France)') to the Umayyad Caliphate. You MUST also annex all of Southern France up to the Loire: add a partial_country for France, setting 'clip_method: natural_boundary', 'clip_description: Loire River', and 'clip_direction: south_of_natural_boundary'.")
+        
+    target_instructions = ""
+    if targets:
+        target_instructions = "\nCRITICAL TARGET INSTRUCTIONS (REQUIRED CONQUESTS):\n" + "\n".join(targets)
+        
+    if year_val < 1800:
+        target_instructions += (
+            "\nCRITICAL ANCIENT CIVILIZATION GEOGRAPHY RULES (< 1800 AD):\n"
+            "- Since this simulation is in the year {year} (ancient/medieval era), modern sub-national province boundaries (like 'Vienne' or 'Aude') are historically irrelevant. "
+            "Do NOT list modern administrative province names in the 'provinces' field for PartialRegion.\n"
+            "- Instead, use 'clip_method: natural_boundary' and define the natural boundary in 'clip_description' "
+            "(e.g., 'Loire River', 'Pyrenees', 'Alps', 'Rhine River', 'Bosphorus') to partition the country cleanly. "
+            "Leave the 'provinces' array empty '[]' when using natural boundaries. The engine will automatically "
+            "clip the entire country along the river/mountain range in that direction.\n"
+            "- GEOGRAPHIC CONTIGUITY & NO LEAPFROGGING: All conquests MUST form a single, contiguous block extending directly from the baseline empire's borders. "
+            "Do NOT leapfrog over unconquered land (for example, do NOT annex Bulgaria or Romania unless you also annex Greece, Thrace, and Constantinople, "
+            "as they lie in between). Avoid isolated enclaves or disconnected territory.\n"
+            "- If a specific key city was captured (like Constantinople or Tours), you may list its containing modern "
+            "province (e.g., 'Istanbul (Turkey)' for Constantinople) in the 'provinces' list to represent that city."
+        )
+        
+    if stage_num == 2 and baselines_override_real:
+        target_instructions += (
+            "\nCRITICAL STAGE 2 MOMENTUM INSTRUCTIONS:\n"
+            "- You achieved a major victory in the previous Stage 1 conflict (Constantinople). You start this stage with that expanded territory. "
+            "Your military morale, resources, and power are extremely high. "
+            "Your conquests in this stage MUST reflect this increased power and momentum. Be ambitious and push borders significantly!"
+        )
+        
+    template_real = _load_prompt_template("expansion_conquest.txt")
+    if template_real:
+        prompt_vars["target_instructions"] = target_instructions.format(year=year_val)
+        prompt_vars["real_conquests_context"] = ""
+        prompt_vars["conquest_type"] = "REALISTIC military simulation: Annex only logically contiguous, nearby border provinces that are physically close to the baseline territory and easily defensible. Do NOT let the empire expand excessively."
+        
+        if stage_num == 2 and baselines_override_real:
+            prompt_vars["real_conquests_context"] = (
+                "\nSTAGE 1 REALISTIC VICTORY ACHIEVED AND INCORPORATED:\n"
+                "- The Stage 1 conflict was successfully won, expanding your starting territory. "
+                "You must build on top of these expanded borders."
+            )
+            
+        real_prompt = template_real.format(**prompt_vars)
+    else:
+        real_prompt = f"Simulate military conquest: {scenario_val}. contested: {contested_provinces}"
+        
+    def force_conquest_provinces(territories):
+        umayyad_t = None
+        for t in territories:
+            if "umayyad" in t.name.lower():
+                umayyad_t = t
+                break
+        
+        if umayyad_t:
+            if "constantinople" in scenario_lower:
+                turkey_p = None
+                for p in umayyad_t.partial_countries:
+                    if p.country.lower() == "turkey":
+                        turkey_p = p
+                        break
+                else:
+                    turkey_p = PartialRegion(country="Turkey", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Byzantine Capital")
+                    umayyad_t.partial_countries.append(turkey_p)
+                if "Istanbul (Turkey)" not in turkey_p.provinces:
+                    turkey_p.provinces.append("Istanbul (Turkey)")
+            if "tours" in scenario_lower or "poitiers" in scenario_lower:
+                france_p = None
+                for p in umayyad_t.partial_countries:
+                    if p.country.lower() == "france":
+                        france_p = p
+                        break
+                else:
+                    france_p = PartialRegion(country="France", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Tours region")
+                    umayyad_t.partial_countries.append(france_p)
+                for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
+                    if f_prov not in france_p.provinces:
+                        france_p.provinces.append(f_prov)
+
+    res_real: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=real_prompt)], temperature=0.7)
+    force_conquest_provinces(res_real.territories)
+    
+    real_conquests_str = ""
+    for t in res_real.territories:
+        conquest_parts = []
+        for p in t.partial_countries:
+            if p.clip_method == "natural_boundary" and p.clip_description:
+                conquest_parts.append(f"{p.country} ({p.clip_direction} of {p.clip_description})")
+            elif p.clip_method in ["coordinate_latitude", "coordinate_longitude"] and p.clip_description:
+                conquest_parts.append(f"{p.country} ({p.clip_description})")
+            elif p.provinces:
+                conquest_parts.append(f"{p.country} (provinces: {', '.join(p.provinces)})")
+        if t.countries_absorbed:
+            conquest_parts.append(f"Fully absorbed countries: {', '.join(t.countries_absorbed)}")
+        if conquest_parts:
+            real_conquests_str += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
+            
+    if template_real:
+        prompt_vars["target_instructions"] = target_instructions.format(year=year_val)
+        
+        if stage_num == 2 and baselines_override_opt:
+            prompt_vars["real_conquests_context"] = (
+                "\nSTAGE 1 OPTIMISTIC VICTORY ACHIEVED AND INCORPORATED:\n"
+                "- The Stage 1 conflict was won under best-case scenarios. You start Stage 2 with these fully expanded borders.\n"
+                f"REALISTIC STAGE 2 BASELINE (YOU MUST INCLUDE AND EXPAND ON THESE):\n{real_conquests_str}"
+            )
+        else:
+            prompt_vars["real_conquests_context"] = f"\nREALISTIC CONQUESTS ACHIEVED (YOU MUST INCLUDE ALL OF THESE AS A BASELINE AND THEN EXPAND SUBSTANTIALLY UPON THEM):\n{real_conquests_str}"
+            
+        if stage_num == 2:
+            prompt_vars["conquest_type"] = (
+                "OPTIMISTIC compounding simulation: This is a BEST-CASE scenario with maximum compounding power and moral from winning both wars. "
+                "You MUST expand significantly beyond the realistic conquests. For example, since they won Tours with Constantinople already secured, "
+                "they should conquer most of France up to the Rhine River (use 'Rhine River' as natural boundary with 'clip_direction: west_of_natural_boundary') "
+                "and expand deeply into the Balkans (fully annexing Greece and Bulgaria, or setting 'clip_description: Danube River' for Bulgaria)."
+            )
+        else:
+            prompt_vars["conquest_type"] = (
+                "OPTIMISTIC military simulation: This is a BEST-CASE scenario representing maximum plausible expansion. "
+                "You MUST expand significantly beyond the realistic conquests. Be highly ambitious, think beyond the baseline, and do NOT return the same boundaries."
+            )
+            
+        opt_prompt = template_real.format(**prompt_vars)
+    else:
+        opt_prompt = real_prompt
+        
+    res_opt: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=opt_prompt)], temperature=0.7)
+    force_conquest_provinces(res_opt.territories)
+    
+    if baselines_override_real:
+        context_val["stage2_baselines"] = baselines_override_real
+    else:
+        context_val.pop("stage2_baselines", None)
+    realistic_features = _process_territory_definitions(res_real.territories, year_val, context_val)
+    
+    if baselines_override_opt:
+        context_val["stage2_baselines"] = baselines_override_opt
+    else:
+        context_val.pop("stage2_baselines", None)
+    optimistic_features = _process_territory_definitions(res_opt.territories, year_val, context_val)
+    
+    context_val.pop("stage2_baselines", None)
+    
+    return res_real, res_opt, realistic_features, optimistic_features
 
 
 def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, str]]) -> Dict[str, Any]:
@@ -623,7 +912,12 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         if isinstance(prompt_contested, list) and len(prompt_contested) > 30:
             prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
             
-    print(f"[SIMULATOR] Ownership summary compiled:\n{ownership_str}")
+    try:
+        print(f"[SIMULATOR] Ownership summary compiled:\n{ownership_str}")
+    except UnicodeEncodeError:
+        import sys
+        enc = sys.stdout.encoding or 'utf-8'
+        print(f"[SIMULATOR] Ownership summary compiled:\n{ownership_str}".encode(enc, errors='replace').decode(enc))
  
     # Assemble answers string if present
     answers_str = ""
@@ -734,111 +1028,91 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
             "features": optimistic_features
         }
         
+    elif mode == "compounding_conquest":
+        # Run Multi-stage Compounding simulation
+        print("[SIMULATOR] Executing Compounding Conquest Sequential Nodes...")
+        plan_dict = context.get("compounding_plan")
+        if not plan_dict:
+            raise ValueError("Compounding plan is missing from context.")
+            
+        scenario_1 = plan_dict["scenario_1"]
+        year_1 = plan_dict["year_1"]
+        scenario_2 = plan_dict["scenario_2"]
+        year_2 = plan_dict["year_2"]
+        
+        # --- STAGE 1 (First Event) ---
+        print(f"[SIMULATOR] --- STAGE 1: Simulating first event '{scenario_1}' at {year_1} ---", flush=True)
+        
+        context_1 = dict(context)
+        context_1["year"] = year_1
+        context_1["scenario"] = scenario_1
+        context_1["simulation_mode"] = "expansion_conquest"
+        
+        # Set collector to extract Stage 1 geometries
+        resolved_real_1 = {}
+        context_1["compounding_resolved_geoms"] = resolved_real_1
+        res_real_1, res_opt_1, realistic_features_1, optimistic_features_1 = _run_conquest_sim(
+            scenario_1, year_1, context_1, stage_num=1
+        )
+        
+        # Extract Stage 1 Optimistic geometries
+        resolved_opt_1 = {}
+        context_1["compounding_resolved_geoms"] = resolved_opt_1
+        _process_territory_definitions(res_opt_1.territories, year_1, context_1)
+        
+        # --- STAGE 2 (Second Event) ---
+        print(f"[SIMULATOR] --- STAGE 2: Simulating second event '{scenario_2}' at {year_2} ---", flush=True)
+        
+        context_2 = dict(context)
+        context_2["year"] = year_2
+        context_2["scenario"] = scenario_2
+        context_2["simulation_mode"] = "expansion_conquest"
+        
+        # Execute Stage 2 with baselines overrides from Stage 1
+        res_real_2, res_opt_2, realistic_features_2, optimistic_features_2 = _run_conquest_sim(
+            scenario_2, year_2, context_2, stage_num=2,
+            baselines_override_real=resolved_real_1,
+            baselines_override_opt=resolved_opt_1
+        )
+        
+        # Combine narratives and timelines from both stages chronologically
+        results["title"] = f"{res_real_1.title} & {res_real_2.title}"
+        results["alternate_outcome"] = (
+            f"Stage 1 (Constantinople - Realistic): {res_real_1.alternate_outcome}\n"
+            f"Stage 2 (Tours - Realistic): {res_real_2.alternate_outcome}\n\n"
+            f"Stage 1 (Constantinople - Optimistic): {res_opt_1.alternate_outcome}\n"
+            f"Stage 2 (Tours - Optimistic): {res_opt_2.alternate_outcome}"
+        )
+        results["key_changes"] = list(set(res_real_1.key_changes + res_opt_1.key_changes + res_real_2.key_changes + res_opt_2.key_changes))
+        results["realistic_scenario_summary"] = "Compounded realistic sequential outcomes with moral momentum."
+        results["optimistic_scenario_summary"] = "Maximum compounded territorial expansion across all theatres."
+        
+        results["butterfly_effects"] = list(set(res_real_1.butterfly_effects + res_opt_1.butterfly_effects + res_real_2.butterfly_effects + res_opt_2.butterfly_effects))
+        results["sources"] = list(set(res_real_1.sources + res_opt_1.sources + res_real_2.sources + res_opt_2.sources))
+        
+        seen_t = set()
+        combined_timeline = []
+        for t in res_real_1.timeline + res_opt_1.timeline + res_real_2.timeline + res_opt_2.timeline:
+            val = f"{t.year}:{t.event}"
+            if val not in seen_t:
+                seen_t.add(val)
+                combined_timeline.append(t.model_dump())
+        results["timeline"] = sorted(combined_timeline, key=lambda x: x["year"])
+        
+        results["geojson_after_realistic"] = {
+            "type": "FeatureCollection",
+            "features": realistic_features_2
+        }
+        results["geojson_after_optimistic"] = {
+            "type": "FeatureCollection",
+            "features": optimistic_features_2
+        }
+        
     else:  # expansion_conquest
-        # Programmatic detection of scenario targets to force LLM compliance
-        scenario_lower = scenario.lower()
-        targets = []
-        if "constantinople" in scenario_lower:
-            targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. You MUST also annex Anatolia/Turkey: add a partial_country for Turkey, setting 'clip_method: natural_boundary', 'clip_description: Bosphorus', and 'clip_direction: south_of_natural_boundary' (or list the provinces).")
-        if "tours" in scenario_lower or "poitiers" in scenario_lower:
-            targets.append("- The Battle of Tours was won. Therefore, you MUST annex key French provinces (such as 'Vienne (France)', 'Indre (France)', 'Indre-et-Loire (France)', 'Haute-Vienne (France)', 'Deux-Sèvres (France)') to the Umayyad Caliphate. You MUST also annex all of Southern France up to the Loire: add a partial_country for France, setting 'clip_method: natural_boundary', 'clip_description: Loire River', and 'clip_direction: south_of_natural_boundary'.")
-        
-        target_instructions = ""
-        if targets:
-            target_instructions = "\nCRITICAL TARGET INSTRUCTIONS (REQUIRED CONQUESTS):\n" + "\n".join(targets)
-            
-        if year < 1800:
-            target_instructions += (
-                "\nCRITICAL ANCIENT CIVILIZATION GEOGRAPHY RULES (< 1800 AD):\n"
-                "- Since this simulation is in the year {year} (ancient/medieval era), modern sub-national province boundaries (like 'Vienne' or 'Aude') are historically irrelevant. "
-                "Do NOT list modern administrative province names in the 'provinces' field for PartialRegion.\n"
-                "- Instead, use 'clip_method: natural_boundary' and define the natural boundary in 'clip_description' "
-                "(e.g., 'Loire River', 'Pyrenees', 'Alps', 'Rhine River', 'Bosphorus') to partition the country cleanly. "
-                "Leave the 'provinces' array empty '[]' when using natural boundaries. The engine will automatically "
-                "clip the entire country along the river/mountain range in that direction.\n"
-                "- GEOGRAPHIC CONTIGUITY & NO LEAPFROGGING: All conquests MUST form a single, contiguous block extending directly from the baseline empire's borders. "
-                "Do NOT leapfrog over unconquered land (for example, do NOT annex Bulgaria or Romania unless you also annex Greece, Thrace, and Constantinople, "
-                "as they lie in between). Avoid isolated enclaves or disconnected territory.\n"
-                "- If a specific key city was captured (like Constantinople or Tours), you may list its containing modern "
-                "province (e.g., 'Istanbul (Turkey)' for Constantinople) in the 'provinces' list to represent that city."
-            )
-            
-        template_real = _load_prompt_template("expansion_conquest.txt")
-        if template_real:
-            prompt_vars["target_instructions"] = target_instructions.format(year=year)
-            prompt_vars["real_conquests_context"] = ""
-            prompt_vars["conquest_type"] = "REALISTIC military simulation: Annex only logically contiguous, nearby border provinces that are physically close to the baseline territory and easily defensible. Do NOT let the empire expand excessively."
-            real_prompt = template_real.format(**prompt_vars)
-        else:
-            real_prompt = f"Simulate military conquest: {scenario}. contested: {contested_provinces}"
-            
-        # Force specific target conquests programmatically
-        def force_conquest_provinces(territories):
-            umayyad_t = None
-            for t in territories:
-                if "umayyad" in t.name.lower():
-                    umayyad_t = t
-                    break
-            
-            if umayyad_t:
-                if "constantinople" in scenario_lower:
-                    turkey_p = None
-                    for p in umayyad_t.partial_countries:
-                        if p.country.lower() == "turkey":
-                            turkey_p = p
-                            break
-                    else:
-                        turkey_p = PartialRegion(country="Turkey", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Byzantine Capital")
-                        umayyad_t.partial_countries.append(turkey_p)
-                    if "Istanbul (Turkey)" not in turkey_p.provinces:
-                        turkey_p.provinces.append("Istanbul (Turkey)")
-                if "tours" in scenario_lower or "poitiers" in scenario_lower:
-                    france_p = None
-                    for p in umayyad_t.partial_countries:
-                        if p.country.lower() == "france":
-                            france_p = p
-                            break
-                    else:
-                        france_p = PartialRegion(country="France", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Tours region")
-                        umayyad_t.partial_countries.append(france_p)
-                    for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
-                        if f_prov not in france_p.provinces:
-                            france_p.provinces.append(f_prov)
-
-        res_real: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=real_prompt)], temperature=0.7)
-        force_conquest_provinces(res_real.territories)
-        
-        # Build realistic conquests context to feed into optimistic scenario
-        real_conquests_str = ""
-        for t in res_real.territories:
-            conquest_parts = []
-            for p in t.partial_countries:
-                if p.clip_method == "natural_boundary" and p.clip_description:
-                    conquest_parts.append(f"{p.country} ({p.clip_direction} of {p.clip_description})")
-                elif p.clip_method in ["coordinate_latitude", "coordinate_longitude"] and p.clip_description:
-                    conquest_parts.append(f"{p.country} ({p.clip_description})")
-                elif p.provinces:
-                    conquest_parts.append(f"{p.country} (provinces: {', '.join(p.provinces)})")
-            if t.countries_absorbed:
-                conquest_parts.append(f"Fully absorbed countries: {', '.join(t.countries_absorbed)}")
-            if conquest_parts:
-                real_conquests_str += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
-                
-        if template_real:
-            prompt_vars["target_instructions"] = target_instructions
-            prompt_vars["real_conquests_context"] = f"\nREALISTIC CONQUESTS ACHIEVED (YOU MUST INCLUDE ALL OF THESE AS A BASELINE AND THEN EXPAND SUBSTANTIALLY UPON THEM):\n{real_conquests_str}"
-            prompt_vars["conquest_type"] = (
-                "OPTIMISTIC military simulation: This is a BEST-CASE scenario for the conquering power representing maximum plausible expansion under peak conditions. "
-                "You MUST expand significantly beyond the realistic conquests. For example, if they conquered Constantinople, they should also conquer and expand "
-                "deeply into the Balkans (Greece, Bulgaria, Albania, North Macedonia, etc.). If they won Tours, they should conquer most of France up to the Rhine River. "
-                "Be highly ambitious, think beyond the baseline, and do NOT return the same boundaries as the realistic scenario."
-            )
-            opt_prompt = template_real.format(**prompt_vars)
-        else:
-            opt_prompt = real_prompt
-            
-        res_opt: ScenarioStateResult = _invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=opt_prompt)], temperature=0.7)
-        force_conquest_provinces(res_opt.territories)
+        print("[SIMULATOR] Executing standard expansion conquest simulation...")
+        res_real, res_opt, realistic_features, optimistic_features = _run_conquest_sim(
+            scenario, year, context, stage_num=1
+        )
         
         results["title"] = res_real.title
         results["alternate_outcome"] = f"Realistic: {res_real.alternate_outcome}\n\nOptimistic: {res_opt.alternate_outcome}"
@@ -846,7 +1120,6 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         results["realistic_scenario_summary"] = "Plausible conquest limits and client states."
         results["optimistic_scenario_summary"] = "Maximum territorial annexations and tributary states."
         
-        # Combine timeline, butterfly effects, and sources
         results["butterfly_effects"] = list(set(res_real.butterfly_effects + res_opt.butterfly_effects))
         results["sources"] = list(set(res_real.sources + res_opt.sources))
         
@@ -859,12 +1132,6 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
                 combined_timeline.append(t.model_dump())
         results["timeline"] = sorted(combined_timeline, key=lambda x: x["year"])
         
-        realistic_features = _process_territory_definitions(res_real.territories, year, context)
-        optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
-        
-        # Apply filter if conquest (removed to allow rendering of all updated polities side-by-side)
-        pass
-            
         results["geojson_after_realistic"] = {
             "type": "FeatureCollection",
             "features": realistic_features
@@ -1369,16 +1636,20 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                         actual_name = bp
                         break
                         
-        print(f"[DEBUG]   Loading baseline geometry for polity: '{actual_name}' at year {year}...", flush=True)
-        base_feat = cliopatria_db.get_polity_geometry(actual_name, year)
-        
+        stage2_baselines = context.get("stage2_baselines") if context else None
         base_geom = None
-        if base_feat and base_feat.get("geometry"):
-            try:
-                base_geom = shape(base_feat["geometry"])
-                print(f"[DEBUG]     Baseline successfully loaded. Area: {base_geom.area:.4f}, Bounds: {base_geom.bounds}", flush=True)
-            except Exception as e:
-                print(f"[DEBUG]     Error parsing base shape for {t.name}: {e}", flush=True)
+        if stage2_baselines and actual_name in stage2_baselines:
+            base_geom = stage2_baselines[actual_name]
+            print(f"[DEBUG]     Using COMPOUNDED Stage 1 final geometry as baseline for polity '{actual_name}'. Area: {base_geom.area:.4f}", flush=True)
+        else:
+            print(f"[DEBUG]   Loading baseline geometry for polity: '{actual_name}' at year {year}...", flush=True)
+            base_feat = cliopatria_db.get_polity_geometry(actual_name, year)
+            if base_feat and base_feat.get("geometry"):
+                try:
+                    base_geom = shape(base_feat["geometry"])
+                    print(f"[DEBUG]     Baseline successfully loaded. Area: {base_geom.area:.4f}, Bounds: {base_geom.bounds}", flush=True)
+                except Exception as e:
+                    print(f"[DEBUG]     Error parsing base shape for {t.name}: {e}", flush=True)
                 
         additions_geom = None
         add_shapes = polity_additions_shapes.get(t.name, [])
@@ -1484,5 +1755,16 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
             },
             "geometry": mapping(final_sh)
         })
+        
+    # Populate resolved geoms collector if present in context
+    if context is not None:
+        compounding_resolved = context.get("compounding_resolved_geoms")
+        if compounding_resolved is not None:
+            compounding_resolved.clear()
+            for item in resolved_territories:
+                t = item["definition"]
+                final_sh = item["final_geom"]
+                if final_sh and not final_sh.is_empty:
+                    compounding_resolved[t.name] = final_sh
         
     return features
