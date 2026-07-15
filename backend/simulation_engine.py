@@ -722,11 +722,8 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         realistic_features = _process_territory_definitions(res_real.territories, year, context)
         optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
         
-        # Apply filter if conquest
-        if is_conquest and baseline_polities:
-            primary_polity = baseline_polities[0].lower()
-            realistic_features = [feat for feat in realistic_features if primary_polity in feat["properties"]["name"].lower()]
-            optimistic_features = [feat for feat in optimistic_features if primary_polity in feat["properties"]["name"].lower()]
+        # Apply filter if conquest (removed to allow rendering of all updated polities side-by-side)
+        pass
             
         results["geojson_after_realistic"] = {
             "type": "FeatureCollection",
@@ -811,12 +808,18 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         # Build realistic conquests context to feed into optimistic scenario
         real_conquests_str = ""
         for t in res_real.territories:
-            provs_by_country = {}
+            conquest_parts = []
             for p in t.partial_countries:
-                if p.provinces:
-                    provs_by_country[p.country] = p.provinces
-            if provs_by_country:
-                real_conquests_str += f"- {t.name} conquered: " + "; ".join(f"{c}: {', '.join(provs)}" for c, provs in provs_by_country.items()) + "\n"
+                if p.clip_method == "natural_boundary" and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_direction} of {p.clip_description})")
+                elif p.clip_method in ["coordinate_latitude", "coordinate_longitude"] and p.clip_description:
+                    conquest_parts.append(f"{p.country} ({p.clip_description})")
+                elif p.provinces:
+                    conquest_parts.append(f"{p.country} (provinces: {', '.join(p.provinces)})")
+            if t.countries_absorbed:
+                conquest_parts.append(f"Fully absorbed countries: {', '.join(t.countries_absorbed)}")
+            if conquest_parts:
+                real_conquests_str += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
                 
         if template_real:
             prompt_vars["target_instructions"] = target_instructions
@@ -856,11 +859,8 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         realistic_features = _process_territory_definitions(res_real.territories, year, context)
         optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
         
-        # Apply filter if conquest
-        if is_conquest and baseline_polities:
-            primary_polity = baseline_polities[0].lower()
-            realistic_features = [feat for feat in realistic_features if primary_polity in feat["properties"]["name"].lower()]
-            optimistic_features = [feat for feat in optimistic_features if primary_polity in feat["properties"]["name"].lower()]
+        # Apply filter if conquest (removed to allow rendering of all updated polities side-by-side)
+        pass
             
         results["geojson_after_realistic"] = {
             "type": "FeatureCollection",
@@ -930,13 +930,13 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None):
                         local_y = p2.y
                         local_x = p2.x
                         
-                        if direction == "north_of_natural_boundary" and scy > local_y:
+                        if direction in ["north_of_natural_boundary", "north_of_latitude"] and scy > local_y:
                             keep_polys.append(sub_poly)
-                        elif direction == "south_of_natural_boundary" and scy < local_y:
+                        elif direction in ["south_of_natural_boundary", "south_of_latitude"] and scy < local_y:
                             keep_polys.append(sub_poly)
-                        elif direction == "west_of_longitude" and scx < local_x:
+                        elif direction in ["west_of_natural_boundary", "west_of_longitude"] and scx < local_x:
                             keep_polys.append(sub_poly)
-                        elif direction == "east_of_longitude" and scx > local_x:
+                        elif direction in ["east_of_natural_boundary", "east_of_longitude"] and scx > local_x:
                             keep_polys.append(sub_poly)
                             
                     if keep_polys:
@@ -953,13 +953,13 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None):
             scx = prov_geom.centroid.x
             
             keep = False
-            if direction == "north_of_natural_boundary" and scy > local_y:
+            if direction in ["north_of_natural_boundary", "north_of_latitude"] and scy > local_y:
                 keep = True
-            elif direction == "south_of_natural_boundary" and scy < local_y:
+            elif direction in ["south_of_natural_boundary", "south_of_latitude"] and scy < local_y:
                 keep = True
-            elif direction == "west_of_longitude" and scx < local_x:
+            elif direction in ["west_of_natural_boundary", "west_of_longitude"] and scx < local_x:
                 keep = True
-            elif direction == "east_of_longitude" and scx > local_x:
+            elif direction in ["east_of_natural_boundary", "east_of_longitude"] and scx > local_x:
                 keep = True
                 
             if keep:
