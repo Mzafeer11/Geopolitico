@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geopolitico — What If? Geopolitical Scenario Simulator</title>
+
+    <!-- Leaflet Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap"
+        rel="stylesheet">
+
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="css/style.css" />
+</head>
+
+<body>
+    <!-- Map Background -->
+    <div id="map"></div>
+
+    <!-- Main Interface Panel -->
+    <div class="sidebar glass">
+        <header>
+            <h1 class="logo">Geopolitico</h1>
+            <p class="subtitle">Unified Alternate History Geopolitical Simulator</p>
+        </header>
+
+        <!-- Configuration & Input Panel -->
+        <section id="input-section" class="panel-card active">
+            <div class="input-group">
+                <label for="scenario-input">What-If Scenario Description</label>
+                <textarea id="scenario-input" rows="4"
+                    placeholder="Describe your scenario. E.g., 'What if the Muslims won the Battle of Tours in 732 AD and pushed further into northern Europe?'"></textarea>
+            </div>
+
+            <button id="simulate-btn" class="primary-btn">Begin Simulation</button>
+
+            <!-- Presets Group -->
+            <div class="presets-section">
+                <h3>Try a Historical Presets</h3>
+                <div class="presets-grid">
+                    <div class="preset-card" data-scenario="What if the Muslims won the Battle of Tours in 732 AD?">
+                        <h4>Battle of Tours</h4>
+                        <p>Expanded Umayyad Caliphate in Europe</p>
+                    </div>
+                    <div class="preset-card"
+                        data-scenario="What if the Chenab Formula was accepted during the 1960s as partition of kashmir between Pakistan and India?">
+                        <h4>Chenab Formula</h4>
+                        <p>Altered Pakistan/India borders</p>
+                    </div>
+                    <div class="preset-card"
+                        data-scenario="What if Muslims were 60 percent of British India's population during partition?">
+                        <h4>60% Muslim Partition</h4>
+                        <p>Speculative shift in boundaries</p>
+                    </div>
+                    <div class="preset-card"
+                        data-scenario="What if the Mongol Empire stayed united and did not fragment in 1259?">
+                        <h4>United Mongol Empire</h4>
+                        <p>Eurasian mega-state simulation</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Loading & Progress Panel -->
+        <section id="loading-section" class="panel-card">
+            <div class="loader-container">
+                <div class="spinner"></div>
+                <h2>Simulating Timeline...</h2>
+                <div id="progress-container">
+                    <p class="current-agent" id="active-agent-display">Geopolitical Simulator is active...</p>
+                    <p class="progress-details" id="progress-details-display">Loading historical maps and baseline
+                        data...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results & Analysis Panel -->
+        <section id="results-section" class="panel-card">
+            <div class="results-header-row">
+                <button id="back-btn" class="text-btn">&larr; New Simulation</button>
+            </div>
+
+            <h2 id="result-title">Simulation Results</h2>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <span class="metric-label">Base Year</span>
+                    <span class="metric-value" id="result-base-year">-</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Plausibility</span>
+                    <span class="metric-value" id="result-confidence">-</span>
+                </div>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="tab-narrative">Narrative</button>
+                <button class="tab-btn" data-tab="tab-timeline">Timeline</button>
+                <button class="tab-btn" data-tab="tab-geopolitics">Geopolitics</button>
+            </div>
+
+            <!-- Tab Contents -->
+            <div class="tab-content active" id="tab-narrative">
+                <h3>Historical Context</h3>
+                <p id="result-context" class="typewriter-text"></p>
+
+                <h3>What Actually Happened</h3>
+                <p id="result-actual" class="typewriter-text"></p>
+
+                <h3>Alternate Geopolitical Outcome</h3>
+                <p id="result-alternate" class="typewriter-text"></p>
+            </div>
+
+            <div class="tab-content" id="tab-timeline">
+                <h3>Chronological Timeline</h3>
+                <ul class="timeline" id="result-timeline-list">
+                    <!-- Events dynamically populated -->
+                </ul>
+            </div>
+
+            <div class="tab-content" id="tab-geopolitics">
+                <h3>Key Border & Political Changes</h3>
+                <ul class="key-changes" id="result-changes-list">
+                    <!-- Changes dynamically populated -->
+                </ul>
+
+                <h3>Speculative Ripple Effects</h3>
+                <ul class="butterfly-effects" id="result-effects-list">
+                    <!-- Ripple effects dynamically populated -->
+                </ul>
+
+                <h3>Verified References</h3>
+                <ul class="sources" id="result-sources-list">
+                    <!-- Sources dynamically populated -->
+                </ul>
+            </div>
+
+            <!-- Refinement / Iteration Input -->
+            <div class="refinement-container"
+                style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.1); padding-top:15px; display:flex; flex-direction:column; gap:5px;">
+                <label for="refinement-input"
+                    style="color:#fbbf24; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; display:flex; align-items:center; gap:5px;">
+                    💡 Refine Geopolitical Outcome
+                </label>
+                <div class="refinement-row" style="display:flex; gap:10px;">
+                    <input type="text" id="refinement-input" placeholder="E.g., 'Assume they also conquered Aquitaine'"
+                        style="flex:1; padding:8px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:4px; color:#fff; font-size:12px;" />
+                    <button id="refine-btn" class="primary-btn"
+                        style="padding:8px 15px; margin:0; font-size:12px; width:auto; flex-shrink:0;">Apply</button>
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <!-- Map View Mode Switcher Overlay -->
+    <div class="map-controls-container">
+        <div class="map-controls glass">
+            <span class="toggle-label">Map:</span>
+            <div class="toggle-switch">
+                <button class="toggle-btn" id="mode-before">Historical</button>
+                <button class="toggle-btn" id="mode-realistic">Realistic</button>
+                <button class="toggle-btn active" id="mode-optimistic">Optimistic</button>
+                <button class="toggle-btn" id="mode-rivers" style="display: none;">Natural Borders</button>
+            </div>
+        </div>
+        <div id="scenario-summary-card" class="scenario-summary-card glass" style="display: none;">
+            <p id="scenario-summary-text"></p>
+        </div>
+    </div>
+
+    <!-- Map Legend -->
+    <div class="legend-panel glass" id="map-legend">
+        <h3>Territories Legend</h3>
+        <div id="legend-items">
+            <!-- Dynamically populated legend -->
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/ui.js?v=1"></script>
+    <script src="js/map.js?v=1"></script>
+    <script src="js/app.js?v=1"></script>
+</body>
+
+</html>

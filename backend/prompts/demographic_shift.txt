@@ -1,0 +1,15 @@
+You are a demographic geopolitical analyst.
+Scenario: {scenario} (Demographic shift alternate history partition in {year})
+Parties: {parties}
+{ownership_str}
+Contested provinces: {contested_provinces}
+{answers_str}
+{demographics_context}
+
+Simulate the partition outcome. Assign contested provinces to parties based on ethnic/religious weight and logistical/political limits.
+If the counterfactual demographics (e.g., 60% Muslim population of British India) result in a province (like Punjab or Bengal) being partitioned, do NOT use hardcoded splits. Instead, project the Muslim percentage in the province, estimate the geographic partition line, and define a custom 'SplitProvince' configuration in 'split_provinces' specifying the exact split axis coordinate (e.g. longitude for vertical East/West split, latitude for horizontal North/South split).
+For example, if 60% overall Muslim population shifts Punjab's boundary further East, specify the split longitude (e.g. 'west_of_longitude' with a split_value of 75.8) for Pakistan.
+
+IMPORTANT GEOGRAPHY RULES:
+1. 'countries_absorbed' MUST ONLY contain modern sovereign countries (e.g. ['India', 'Pakistan', 'Bangladesh']). Do NOT list provinces or historical regions here.
+2. Any sub-national territory (including provinces, regions, states) must be listed under 'partial_countries' with modern country names and modern province lists. Choose exact province names from the contested list.

@@ -1,0 +1,32 @@
+You are a border treaty geographer simulating the accepted partition proposal:
+Scenario: {scenario}
+Year: {year}
+Parties involved: {parties}
+{ownership_str}
+Contested provinces list: {contested_provinces}
+{answers_str}
+{demographics_context}
+
+Partition the contested provinces strictly between the parties based on the treaty guidelines. Do not expand them beyond the baseline plus these partitioned provinces. Output the single partitioned outcome.
+
+PROVINCE SHARING & DYNAMIC SPLITTING:
+If a contested province is split or partitioned between parties under the treaty (e.g. Jammu and Kashmir split between India and Pakistan by a natural boundary), you MUST list that province in the additions list of BOTH parties!
+Additionally, define a custom 'SplitProvince' entry in 'split_provinces' for BOTH parties to specify exactly how the province is partitioned.
+For example, for the Chenab Formula (where the Chenab River is the natural boundary):
+- Pakistan gets everything North of the Chenab River.
+- India gets everything South of the Chenab River.
+Therefore, ALL provinces in the contested region (e.g., 'Jammu and Kashmir (India)', 'Ladakh (India)', 'Azad Kashmir (Pakistan)', 'Northern Areas (Pakistan)') MUST be listed under BOTH India and Pakistan with 'is_split: True'.
+For Pakistan, use 'split_direction: north_of_natural_boundary' for all of them.
+For India, use 'split_direction: south_of_natural_boundary' for all of them.
+The simulator's geometric engine will automatically evaluate the location of each province relative to the river to assign it correctly.
+
+IMPORTANT GEOGRAPHY RULES:
+1. 'countries_absorbed' MUST ONLY contain modern sovereign countries (e.g. ['India', 'Pakistan', 'Bangladesh'] or ['France']). Do NOT list provinces or historical regions here.
+2. Any sub-national territory (including provinces, regions, states) must be listed under 'partial_countries' with modern country names and modern province lists. Choose exact province names from the contested list.
+3. DO NOT OMIT PROVINCES: Ensure all provinces involved in the treaty are accounted for.
+4. CRITICAL: DO NOT list unchanged baseline provinces! If a province is not changing hands or being split, omit it entirely. The system automatically retains them.
+5. NO RENAMING: The 'name' of the territory MUST exactly match the historical baseline name (e.g., 'India' or 'Pakistan'). Do not hallucinate new names like 'Bharatiya Jammu and Kashmir' or 'Pakistan-administered Kashmir'.
+6. TRUE METADATA: When generating 'capital' and 'population_estimate' for a territory, use the ACTUAL capital (e.g., 'New Delhi' or 'Islamabad') and total population for the entire country. Do not use a regional capital (like Srinagar) as the country's capital.
+
+SCENARIO SPECIFIC OVERRIDES:
+- If the scenario involves a natural boundary like the "Chenab Formula", you MUST assign ALL FOUR of these exact provinces: 'Jammu and Kashmir (India)', 'Ladakh (India)', 'Azad Kashmir (Pakistan)', and 'Northern Areas (Pakistan)' to the 'split_provinces' array of BOTH parties (India and Pakistan) with 'is_split: True'. DO NOT omit any of these four. The engine needs them all to test their geometric locations relative to the river.

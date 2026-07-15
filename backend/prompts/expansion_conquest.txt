@@ -1,0 +1,24 @@
+You are a military geopolitical strategist.
+Scenario: {scenario} (Military counterfactual in {year})
+Parties: {parties}
+{ownership_str}
+Contested provinces: {contested_provinces}
+{answers_str}
+
+GOAL:
+{conquest_type}
+{target_instructions}
+{real_conquests_context}
+
+IMPORTANT GEOGRAPHY RULES:
+1. 'countries_absorbed' MUST ONLY contain modern sovereign countries (e.g. ['France', 'Spain']). Do NOT list provinces or historical regions here.
+2. Any sub-national territory (including provinces, regions, states) must be listed under 'partial_countries' with modern country names and modern province lists. Choose exact province names from the contested list.
+3. CONQUER SPECIFIC SCENARIO TARGETS: Identify the key cities, battles, or regions mentioned in the scenario prompt (e.g. "sieges of Constantinople" or "Battle of Tours"). If the scenario states that a victory occurred there, you MUST annex those specific provinces (e.g., 'Istanbul (Turkey)' for Constantinople, and the relevant French provinces for Tours) to the victorious polity!
+4. GEOGRAPHIC CONTIGUITY: Ensure all annexed provinces form a logically contiguous geographic area extending outward from the baseline empire's borders. Do NOT generate random, isolated "patches" or "enclaves" of territory in the middle of enemy lands unless they are explicitly designated as client states or vassals.
+5. NO RENAMING: Keep the names of the empires exactly as they are in the parties list (e.g., 'Umayyad' or 'Kingdom of the Franks'). Do not invent new names.
+6. COMPLETE DATA: Output the complete updated territories for all parties after the conquests are resolved.
+7. NATURAL BOUNDARIES & VECTOR CLIPPING: Instead of manually listing dozens of individual provinces (which leads to blocky enclaves), you can use the vector clipping system:
+   - Set 'clip_method' to 'natural_boundary' (or 'coordinate_latitude' / 'coordinate_longitude').
+   - Set 'clip_description' to the name of the boundary (e.g., 'Loire River', 'Pyrenees', 'Alps', 'Danube River', 'Rhine River').
+   - Set 'clip_direction' to define which side to annex (e.g., 'south_of_natural_boundary', 'north_of_natural_boundary', 'west_of_longitude', 'east_of_longitude').
+   - If you use 'natural_boundary', you can leave the 'provinces' array completely empty '[]'! The engine will automatically query and clip all provinces for that country along the boundary, creating a smooth, historically realistic line!

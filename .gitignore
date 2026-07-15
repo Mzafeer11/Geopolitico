@@ -1,0 +1,26 @@
+# Environments
+.env
+.env.*
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Editor & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Project Scratch Directories
+scratch/
+test_*.py
+
+# Large Data & Cache Files
+data/*.geojson
+data/whg_cache/
