@@ -35,25 +35,6 @@ BOUNDARY_COUNTRIES_MAP = {
 
 # ─── Pydantic Output Schemas ──────────────────────────────────────────────────
 
-class EnclaveResolutionOption(BaseModel):
-    action: Literal["addition", "subtraction"] = Field(description="Whether this option adds connecting land bridge (addition) or pulls back/removes enclave (subtraction).")
-    description: str = Field(description="Explanation of the choice for the user (e.g. 'Annex European Turkey to create land bridge' or 'Withdraw from Greece').")
-    countries_absorbed: List[str] = Field(default=[], description="List of modern country names to add/remove.")
-    partial_countries: List[Any] = Field(default=[], description="List of PartialRegion definitions to add/remove.")
-    
-class ValidationAnomalyQuestion(BaseModel):
-    id: str = Field(description="Unique ID for this anomaly (e.g., 'greece_enclave').")
-    issue_description: str = Field(description="Description of the enclave/gap detected.")
-    scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this anomaly is in the realistic or optimistic result.")
-    option_1: EnclaveResolutionOption = Field(description="Option 1: Add connecting land bridge.")
-    option_2: EnclaveResolutionOption = Field(description="Option 2: Pull back and remove enclave.")
-    option_1_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated green highlight GeoJSON features for Option 1.")
-    option_2_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated red highlight GeoJSON features for Option 2.")
-
-class AnomalyCheckResult(BaseModel):
-    has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
-    questions: List[ValidationAnomalyQuestion] = Field(default=[], description="List of questions to resolve the detected enclaves.")
-
 
 class PlanningResult(BaseModel):
     year: int = Field(description="The target base year of the simulation context.")
@@ -90,7 +71,7 @@ class PartialRegion(BaseModel):
         description="Method to clip/select geometry: 'provinces' (use provinces list), 'natural_boundary' (clip country by river/mountains), 'coordinate_latitude', 'coordinate_longitude'."
     )
     clip_value: Optional[float] = Field(None, description="Coordinate value for clipping (latitude or longitude).")
-    clip_description: str = Field(description="Name of the natural boundary (e.g. 'Loire River', 'Pyrenees') if clip_method is 'natural_boundary'.")
+    clip_description: str = Field(default="", description="Name of the natural boundary (e.g. 'Loire River', 'Pyrenees') if clip_method is 'natural_boundary'.")
     clip_direction: Optional[str] = Field(
         None,
         description="Direction to keep: 'north_of_natural_boundary', 'south_of_natural_boundary', 'west_of_longitude', 'east_of_longitude', 'north_of_latitude', 'south_of_latitude'."
@@ -100,6 +81,26 @@ class PartialRegion(BaseModel):
         default="direct_control",
         description="Status: 'direct_control', 'vassal', or 'tributary'."
     )
+
+
+class EnclaveResolutionOption(BaseModel):
+    action: Literal["addition", "subtraction"] = Field(description="Whether this option adds connecting land bridge (addition) or pulls back/removes enclave (subtraction).")
+    description: str = Field(description="Explanation of the choice for the user (e.g. 'Annex European Turkey to create land bridge' or 'Withdraw from Greece').")
+    countries_absorbed: List[str] = Field(default=[], description="List of modern country names to add/remove.")
+    partial_countries: List[PartialRegion] = Field(default=[], description="List of PartialRegion definitions to add/remove.")
+    
+class ValidationAnomalyQuestion(BaseModel):
+    id: str = Field(description="Unique ID for this anomaly (e.g., 'greece_enclave').")
+    issue_description: str = Field(description="Description of the enclave/gap detected.")
+    scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this anomaly is in the realistic or optimistic result.")
+    option_1: EnclaveResolutionOption = Field(description="Option 1: Add connecting land bridge.")
+    option_2: EnclaveResolutionOption = Field(description="Option 2: Pull back and remove enclave.")
+    option_1_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated green highlight GeoJSON features for Option 1.")
+    option_2_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated red highlight GeoJSON features for Option 2.")
+
+class AnomalyCheckResult(BaseModel):
+    has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
+    questions: List[ValidationAnomalyQuestion] = Field(default=[], description="List of questions to resolve the detected enclaves.")
 
 
 class TerritoryChange(BaseModel):
@@ -992,8 +993,10 @@ def _run_conquest_sim(
     force_conquest_provinces(res_opt.territories, scenario_val)
     
     # Run the Geopolitical Validation AI Node to enforce contiguity and exclusivity
-    res_real = _run_geopolitical_validation(res_real, scenario_val, year_val, context_val)
-    res_opt = _run_geopolitical_validation(res_opt, scenario_val, year_val, context_val)
+    # Skip running validation during Stage 1 of compounding conquest (run it only at Stage 2 for final outcomes)
+    if context_val.get("simulation_mode") != "compounding_conquest" or stage_num == 2:
+        res_real = _run_geopolitical_validation(res_real, scenario_val, year_val, context_val)
+        res_opt = _run_geopolitical_validation(res_opt, scenario_val, year_val, context_val)
     
     if baselines_override_real:
         context_val["stage2_baselines"] = baselines_override_real
