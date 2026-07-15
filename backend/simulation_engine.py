@@ -1206,7 +1206,7 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     }
 
 
-def clip_province_geom(prov_geom, boundary_geom, direction, val=None):
+def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=None, territory_desc=None):
     from shapely.ops import split, nearest_points
     from shapely.geometry import box
     from shapely.ops import unary_union
@@ -1237,11 +1237,32 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None):
         
     if boundary_geom:
         # Exclude far-away disconnected regions/islands (like Corsica) from mainland boundaries
-        try:
-            if prov_geom.distance(boundary_geom) > 3.0:
-                return None
-        except Exception:
-            pass
+        # UNLESS they are explicitly mentioned by the LLM in the description
+        is_mentioned = False
+        if prov_name and territory_desc:
+            p_lower = prov_name.lower()
+            desc_lower = territory_desc.lower()
+            island_keywords = []
+            if "corse" in p_lower or "corsica" in p_lower:
+                island_keywords = ["corse", "corsica"]
+            elif "baleares" in p_lower or "balearic" in p_lower:
+                island_keywords = ["baleares", "balearic", "mallorca", "menorca", "ibiza"]
+            elif "sardegna" in p_lower or "sardinia" in p_lower:
+                island_keywords = ["sardegna", "sardinia"]
+            elif "sicilia" in p_lower or "sicily" in p_lower:
+                island_keywords = ["sicilia", "sicily"]
+                
+            for kw in island_keywords:
+                if kw in desc_lower:
+                    is_mentioned = True
+                    break
+                    
+        if not is_mentioned:
+            try:
+                if prov_geom.distance(boundary_geom) > 3.0:
+                    return None
+            except Exception:
+                pass
             
         # Check if boundary intersects the province
         if boundary_geom.intersects(prov_geom):
@@ -1449,7 +1470,7 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                     prov_geom = shape(feats[0]["geometry"])
                     
                     try:
-                        clipped_geom = clip_province_geom(prov_geom, boundary_geom, p.clip_direction, p.clip_value)
+                        clipped_geom = clip_province_geom(prov_geom, boundary_geom, p.clip_direction, p.clip_value, prov_name=prov, territory_desc=t.description)
                         if clipped_geom and not clipped_geom.is_empty:
                             polity_additions_shapes[t.name].append(clipped_geom)
                             assigned_parts.setdefault(prov, []).append(clipped_geom)
