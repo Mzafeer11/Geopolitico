@@ -17,6 +17,20 @@ from backend.tools.gis_tools import geocode_landmark_tool, natural_boundary_tool
 # ─── Session Store ───────────────────────────────────────────────────────────
 _sessions: Dict[str, Dict[str, Any]] = {}
 
+# ─── Natural Boundaries mapping ──────────────────────────────────────────────
+BOUNDARY_COUNTRIES_MAP = {
+    "loire": ["France"],
+    "pyrenees": ["France", "Spain", "Andorra"],
+    "pyrénées": ["France", "Spain", "Andorra"],
+    "alps": ["France", "Italy", "Switzerland", "Germany", "Austria", "Slovenia", "Liechtenstein"],
+    "rhine": ["Germany", "France", "Switzerland", "Netherlands", "Austria", "Liechtenstein"],
+    "danube": ["Germany", "Austria", "Slovakia", "Hungary", "Croatia", "Serbia", "Romania", "Bulgaria", "Moldova", "Ukraine"],
+    "bosphorus": ["Turkey"],
+    "chenab": ["India", "Pakistan"],
+    "rhone": ["France", "Switzerland"],
+    "rhône": ["France", "Switzerland"]
+}
+
 
 # ─── Pydantic Output Schemas ──────────────────────────────────────────────────
 
@@ -678,22 +692,9 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     scenario = context["scenario"]
     
     # Expand target countries list automatically if natural boundaries are detected in scenario text
-    boundary_countries_map = {
-        "loire": ["France"],
-        "pyrenees": ["France", "Spain", "Andorra"],
-        "pyrénées": ["France", "Spain", "Andorra"],
-        "alps": ["France", "Italy", "Switzerland", "Germany", "Austria", "Slovenia", "Liechtenstein"],
-        "rhine": ["Germany", "France", "Switzerland", "Netherlands", "Austria", "Liechtenstein"],
-        "danube": ["Germany", "Austria", "Slovakia", "Hungary", "Croatia", "Serbia", "Romania", "Bulgaria", "Moldova", "Ukraine"],
-        "bosphorus": ["Turkey"],
-        "chenab": ["India", "Pakistan"],
-        "rhone": ["France", "Switzerland"],
-        "rhône": ["France", "Switzerland"]
-    }
-    
     scenario_lower = scenario.lower()
     expanded_countries = list(context.get("target_countries", []))
-    for kw, b_countries in boundary_countries_map.items():
+    for kw, b_countries in BOUNDARY_COUNTRIES_MAP.items():
         if kw in scenario_lower:
             for c in b_countries:
                 if c not in expanded_countries:
@@ -1235,6 +1236,13 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None):
         return res if res and not res.is_empty else None
         
     if boundary_geom:
+        # Exclude far-away disconnected regions/islands (like Corsica) from mainland boundaries
+        try:
+            if prov_geom.distance(boundary_geom) > 3.0:
+                return None
+        except Exception:
+            pass
+            
         # Check if boundary intersects the province
         if boundary_geom.intersects(prov_geom):
             try:
@@ -1324,6 +1332,36 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
     
     for t in territories:
         print(f"[DEBUG] Processing territory definitions for '{t.name}'...", flush=True)
+        
+        # Dynamically expand partial_countries if a natural boundary crosses multiple countries
+        expanded_partials = []
+        for p in t.partial_countries:
+            expanded_partials.append(p)
+            if p.clip_method == "natural_boundary" and p.clip_description:
+                b_name_lower = p.clip_description.lower()
+                matched_countries = []
+                for kw, b_countries in BOUNDARY_COUNTRIES_MAP.items():
+                    if kw in b_name_lower:
+                        matched_countries = b_countries
+                        break
+                
+                for c in matched_countries:
+                    # Exclude if country is already defined in partials or absorbed
+                    if c.lower() not in [x.country.lower() for x in t.partial_countries] and c.lower() not in [x.lower() for x in getattr(t, "countries_absorbed", [])]:
+                        new_p = PartialRegion(
+                            country=c,
+                            provinces=[],
+                            split_provinces=[],
+                            clip_method=p.clip_method,
+                            clip_value=p.clip_value,
+                            clip_description=p.clip_description,
+                            clip_direction=p.clip_direction,
+                            landmark_city=None,
+                            status=p.status
+                        )
+                        expanded_partials.append(new_p)
+                        print(f"[DEBUG]   Dynamically expanded natural boundary '{p.clip_description}' to include country: '{c}'", flush=True)
+        t.partial_countries = expanded_partials
         
         # Load all provinces of fully absorbed countries as additions
         for country_name in getattr(t, "countries_absorbed", []):
