@@ -205,7 +205,7 @@ async def interactive_step(req: InteractiveRequest, background_tasks: Background
 
 
 @app.post("/api/simulate/verify")
-async def simulate_verify(req: VerifyRequest, background_tasks: BackgroundTasks):
+async def verify_simulation(req: VerifyRequest, background_tasks: BackgroundTasks):
     """Finalize job with validation selections."""
     import uuid
     job_id = str(uuid.uuid4())
