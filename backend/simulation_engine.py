@@ -346,14 +346,17 @@ def _check_geopolitical_anomalies(
                         pc_list.append(pc)
                 # Create a temporary territory to compile
                 t_mock = TerritoryChange(
-                    name=winner_polity,
-                    type="empire",
+                    name="HighlightLayer",
+                    type="region",
                     color="#2ecc71",
                     countries_absorbed=opt1.countries_absorbed,
                     partial_countries=pc_list,
                     description=opt1.description
                 )
-                feats = _process_territory_definitions([t_mock], year, context)
+                feats = _process_territory_definitions(
+                    [t_mock], year,
+                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": []}
+                )
                 for f in feats:
                     f["properties"]["color"] = "#2ecc71"
                     f["properties"]["description"] = f"Proposed Addition: {opt1.description}"
@@ -371,14 +374,17 @@ def _check_geopolitical_anomalies(
                     else:
                         pc_list.append(pc)
                 t_mock = TerritoryChange(
-                    name=winner_polity,
-                    type="empire",
+                    name="HighlightLayer",
+                    type="region",
                     color="#ef4444",
                     countries_absorbed=opt2.countries_absorbed,
                     partial_countries=pc_list,
                     description=opt2.description
                 )
-                feats = _process_territory_definitions([t_mock], year, context)
+                feats = _process_territory_definitions(
+                    [t_mock], year,
+                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": []}
+                )
                 for f in feats:
                     f["properties"]["color"] = "#ef4444"
                     f["properties"]["description"] = f"Proposed Subtraction: {opt2.description}"
@@ -714,21 +720,26 @@ def simulate_verify(session_id: str, selections: Dict[str, str]) -> Dict[str, An
     realistic_features = _process_territory_definitions(res_real.territories, year, context)
     optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
     
-    # Run _run_final_simulation with answers=None to compile standard timeline/narrative result structure
-    final_res = _run_final_simulation(context, answers=None)
-    
-    # Override the features in final result with our validated/customized features!
-    if "result" in final_res:
-        final_res["result"]["geojson_after_realistic"] = {
-            "type": "FeatureCollection",
-            "features": realistic_features
-        }
-        final_res["result"]["geojson_after_optimistic"] = {
-            "type": "FeatureCollection",
-            "features": optimistic_features
-        }
+    # Retrieve the pre-compiled results from when the simulation paused for validation
+    results = context.get("results")
+    if not results:
+        # Fallback to fresh dictionary if not found
+        results = {}
         
-    return final_res
+    results["geojson_after_realistic"] = {
+        "type": "FeatureCollection",
+        "features": realistic_features
+    }
+    results["geojson_after_optimistic"] = {
+        "type": "FeatureCollection",
+        "features": optimistic_features
+    }
+    
+    return {
+        "status": "completed",
+        "session_id": session_id,
+        "result": results
+    }
 
 
 def simulate_step(session_id: str, message: str) -> Dict[str, Any]:
@@ -1568,6 +1579,7 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
             context["pending_real_result"] = pending_real.model_dump()
             context["pending_opt_result"] = pending_opt.model_dump()
             context["anomalies"] = questions_list
+            context["results"] = results
             _sessions[context["session_id"]] = context
             
             print(f"[SIMULATOR] Pausing simulation for user validation choice on {len(questions_list)} anomalies...", flush=True)
