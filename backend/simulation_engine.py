@@ -601,12 +601,28 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
                         pass
                 break
                 
-    ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
-    for polity, provs in baseline_ownership.items():
-        if len(provs) > 15:
-            ownership_str += f"- {polity} currently controls {len(provs)} provinces including: {', '.join(provs[:15])} ... [and {len(provs) - 15} more]\n"
-        else:
-            ownership_str += f"- {polity} currently controls: {', '.join(provs) if provs else 'None'}\n"
+    is_ancient_conquest = (year < 1800 and mode == "expansion_conquest")
+    
+    if is_ancient_conquest:
+        ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
+        for polity, provs in baseline_ownership.items():
+            countries_controlled = sorted(list(set(prov.split('(')[-1].replace(')', '').strip() for prov in provs)))
+            ownership_str += f"- {polity} currently controls territory within the following modern countries: {', '.join(countries_controlled) if countries_controlled else 'None'}\n"
+        
+        prompt_contested = f"Contested provinces are located within the following modern countries: {', '.join(sorted(context.get('target_countries', target_countries)) if context else sorted(target_countries))}. Since this is an ancient/medieval scenario (< 1800 AD), do NOT attempt to annex modern administrative provinces individually. Instead, define your conquests using whole countries, or use the natural boundary vector clipping system (e.g. Loire River, Pyrenees, Alps, Rhine River) with empty provinces array '[]' to draw smooth natural borders. The only exception is capturing a famous capital city, in which case you can annex its modern province (e.g. 'Istanbul (Turkey)' for Constantinople)."
+    else:
+        ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
+        for polity, provs in baseline_ownership.items():
+            if len(provs) > 15:
+                ownership_str += f"- {polity} currently controls {len(provs)} provinces including: {', '.join(provs[:15])} ... [and {len(provs) - 15} more]\n"
+            else:
+                ownership_str += f"- {polity} currently controls: {', '.join(provs) if provs else 'None'}\n"
+                
+        # Truncate contested provinces list in prompt if too long to prevent token limit errors
+        prompt_contested = contested_provinces
+        if isinstance(prompt_contested, list) and len(prompt_contested) > 30:
+            prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
+            
     print(f"[SIMULATOR] Ownership summary compiled:\n{ownership_str}")
  
     # Assemble answers string if present
@@ -615,11 +631,6 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         answers_str = "\nUser preferences for this scenario:\n" + "\n".join(f"- {q}: {a}" for q, a in answers.items())
         
     results = {}
-    
-    # Truncate contested provinces list in prompt if too long to prevent token limit errors
-    prompt_contested = contested_provinces
-    if isinstance(prompt_contested, list) and len(prompt_contested) > 30:
-        prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
     
     # Load dynamic prompts template variables
     prompt_vars = {
@@ -739,9 +750,22 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         if targets:
             target_instructions = "\nCRITICAL TARGET INSTRUCTIONS (REQUIRED CONQUESTS):\n" + "\n".join(targets)
             
+        if year < 1800:
+            target_instructions += (
+                "\nCRITICAL ANCIENT CIVILIZATION GEOGRAPHY RULES (< 1800 AD):\n"
+                "- Since this simulation is in the year {year} (ancient/medieval era), modern sub-national province boundaries (like 'Vienne' or 'Aude') are historically irrelevant. "
+                "Do NOT list modern administrative province names in the 'provinces' field for PartialRegion.\n"
+                "- Instead, use 'clip_method: natural_boundary' and define the natural boundary in 'clip_description' "
+                "(e.g., 'Loire River', 'Pyrenees', 'Alps', 'Rhine River', 'Bosphorus') to partition the country cleanly. "
+                "Leave the 'provinces' array empty '[]' when using natural boundaries. The engine will automatically "
+                "clip the entire country along the river/mountain range in that direction.\n"
+                "- If a specific key city was captured (like Constantinople or Tours), you may list its containing modern "
+                "province (e.g., 'Istanbul (Turkey)' for Constantinople) in the 'provinces' list to represent that city."
+            )
+            
         template_real = _load_prompt_template("expansion_conquest.txt")
         if template_real:
-            prompt_vars["target_instructions"] = target_instructions
+            prompt_vars["target_instructions"] = target_instructions.format(year=year)
             prompt_vars["real_conquests_context"] = ""
             prompt_vars["conquest_type"] = "REALISTIC military simulation: Annex only logically contiguous, nearby border provinces that are physically close to the baseline territory and easily defensible. Do NOT let the empire expand excessively."
             real_prompt = template_real.format(**prompt_vars)
