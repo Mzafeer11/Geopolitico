@@ -102,6 +102,9 @@ class AnomalyCheckResult(BaseModel):
     has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
     questions: List[ValidationAnomalyQuestion] = Field(default=[], description="List of questions to resolve the detected enclaves.")
 
+class ValidationTerritoriesResult(BaseModel):
+    territories: List[TerritoryChange] = Field(description="The audited and corrected list of all territories.")
+
 
 class TerritoryChange(BaseModel):
     name: str = Field(description="Name of the alternate history territory or empire.")
@@ -267,17 +270,20 @@ def _run_geopolitical_validation(
         )
         
         print(f"[SIMULATOR] Launching Geopolitical Validation Node for '{winner_polity}'...", flush=True)
-        validated_result: ScenarioStateResult = _invoke_structured_with_fallback(
-            ScenarioStateResult, 
+        validated_data: ValidationTerritoriesResult = _invoke_structured_with_fallback(
+            ValidationTerritoriesResult, 
             [SystemMessage(content=prompt)], 
             temperature=0.2
         )
         
         # Apply force_conquest_provinces on the validated output as a post-processing guardrail
-        force_conquest_provinces(validated_result.territories, scenario)
+        force_conquest_provinces(validated_data.territories, scenario)
+        
+        # Inject the corrected territories back into the original result, keeping all narratives intact
+        result.territories = validated_data.territories
         
         print("[SIMULATOR] Geopolitical Validation completed successfully.", flush=True)
-        return validated_result
+        return result
     except Exception as e:
         print(f"[WARN] Geopolitical Validation failed: {e}. Falling back to original result.", flush=True)
         traceback.print_exc()

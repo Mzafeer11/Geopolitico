@@ -26,4 +26,4 @@ Your task is to review and correct this output to ensure strict geopolitical rea
 - If a vector boundary clip is used (e.g., Loire River or Rhine River), ensure the country being clipped is list ONLY in 'partial_countries' and NOT in 'countries_absorbed'.
 - Ensure the 'clip_direction' matches the geographic position of the conquered territory relative to the boundary (e.g. south of Loire for Umayyad expansion from Spain, west of Rhine for expansion into Germany).
 
-Respond with the finalized, corrected simulation result in the exact same structured schema as the input. Keep all other narrative fields (title, alternate_outcome, key_changes, timeline, sources) intact, only correcting geographic errors in 'territories'.
+Respond with the audited and corrected list of territories under the 'territories' field. Do not include any other fields in your response.
