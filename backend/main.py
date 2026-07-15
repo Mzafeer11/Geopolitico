@@ -1,6 +1,55 @@
 import os
+import sys
 import json
 import traceback
+
+class Tee(object):
+    def __init__(self, filename, mode="a"):
+        self.file = open(filename, mode, encoding="utf-8")
+        self.stdout = sys.stdout
+
+    def write(self, data):
+        try:
+            self.file.write(data)
+            self.file.flush()
+        except Exception:
+            pass
+        self.stdout.write(data)
+        self.stdout.flush()
+
+    def flush(self):
+        try:
+            self.file.flush()
+        except Exception:
+            pass
+        self.stdout.flush()
+
+class TeeStderr(object):
+    def __init__(self, filename, mode="a"):
+        self.file = open(filename, mode, encoding="utf-8")
+        self.stderr = sys.stderr
+
+    def write(self, data):
+        try:
+            self.file.write(data)
+            self.file.flush()
+        except Exception:
+            pass
+        self.stderr.write(data)
+        self.stderr.flush()
+
+    def flush(self):
+        try:
+            self.file.flush()
+        except Exception:
+            pass
+        self.stderr.flush()
+
+# Configure logging path in the project root directory
+log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "simulation.log")
+sys.stdout = Tee(log_path, "w")
+sys.stderr = TeeStderr(log_path, "w")
+
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
