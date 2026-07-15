@@ -634,7 +634,7 @@ def _run_conquest_sim(
             prompt_vars["real_conquests_context"] = (
                 "\nSTAGE 1 OPTIMISTIC VICTORY ACHIEVED AND INCORPORATED:\n"
                 "- The Stage 1 conflict was won under best-case scenarios. You start Stage 2 with these fully expanded borders.\n"
-                f"REALISTIC STAGE 2 BASELINE (YOU MUST INCLUDE AND EXPAND ON THESE):\n{real_conquests_str}"
+                f"REALISTIC STAGE 2 BASELINE (YOU MUST EXPAND BEYOND THESE IN THIS OPTIMISTIC RUN):\n{real_conquests_str}"
             )
             # Add loss instructions to target_instructions for Stage 2 Optimistic
             prompt_vars["target_instructions"] += (
@@ -645,7 +645,13 @@ def _run_conquest_sim(
                 f"absorb Turkey, Constantinople, or Greece, as those are now owned by the Umayyad Caliphate!"
             )
         else:
-            prompt_vars["real_conquests_context"] = f"\nREALISTIC CONQUESTS ACHIEVED (YOU MUST INCLUDE ALL OF THESE AS A BASELINE AND THEN EXPAND SUBSTANTIALLY UPON THEM):\n{real_conquests_str}"
+            prompt_vars["real_conquests_context"] = (
+                f"\nREALISTIC CONQUESTS ACHIEVED IN THIS EVENT:\n{real_conquests_str}"
+                "\nCRITICAL OPTIMISTIC EXPANSION REQUIREMENT:\n"
+                "- You MUST NOT return the same boundaries as the realistic scenario. "
+                "Replace realistic boundaries with wider/larger boundaries (e.g. if the realistic boundary was the Loire River, "
+                "replace it with the Rhine River using 'clip_description: Rhine River', 'clip_direction: west_of_natural_boundary')."
+            )
             
         if stage_num == 2:
             prompt_vars["conquest_type"] = (
@@ -657,7 +663,8 @@ def _run_conquest_sim(
         else:
             prompt_vars["conquest_type"] = (
                 "OPTIMISTIC military simulation: This is a BEST-CASE scenario representing maximum plausible expansion. "
-                "You MUST expand significantly beyond the realistic conquests. Be highly ambitious, think beyond the baseline, and do NOT return the same boundaries."
+                "You MUST expand significantly beyond the realistic conquests. Be highly ambitious, think beyond the baseline, "
+                "do NOT return the same boundaries, and replace realistic boundaries with wider ones."
             )
             
         opt_prompt = template_real.format(**prompt_vars)
@@ -1196,8 +1203,17 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     results["what_actually_happened"] = "Real timeline outcome."
     results["geojson_before"] = geojson_before
     results["confidence_score"] = 0.85
-    results["osm_boundary_geometry"] = context.get("osm_boundary_geometry")
-    results["osm_boundary_name"] = context.get("osm_boundary_name")
+    # Merge all loaded natural boundary paths so the Natural Borders view overlays all of them simultaneously
+    all_boundary_paths = []
+    boundary_names = []
+    if "osm_boundaries" in context:
+        for name, paths in context["osm_boundaries"].items():
+            if paths:
+                all_boundary_paths.extend(paths)
+                boundary_names.append(name)
+                
+    results["osm_boundary_geometry"] = all_boundary_paths
+    results["osm_boundary_name"] = ", ".join(boundary_names) if boundary_names else "Natural Borders"
     results["map_markers"] = context.get("map_markers", [])
     
     return {
@@ -1351,8 +1367,21 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
     polity_additions_shapes = {t.name: [] for t in territories}
     assigned_parts = {}
     
+    # Identify conqueror / winner in conquest modes
+    is_conquest = (mode in ["expansion_conquest", "compounding_conquest"])
+    baseline_pols = context.get("baseline_polities", []) if context else []
+    winner_polity = baseline_pols[0] if baseline_pols else None
+    
     for t in territories:
         print(f"[DEBUG] Processing territory definitions for '{t.name}'...", flush=True)
+        
+        is_winner = True
+        if is_conquest and winner_polity:
+            is_winner = (winner_polity.lower() in t.name.lower() or t.name.lower() in winner_polity.lower())
+            
+        if is_conquest and not is_winner:
+            print(f"[DEBUG]   Opponent '{t.name}' detected in conquest mode. Skipping additions and keeping baseline.", flush=True)
+            continue
         
         # Dynamically expand partial_countries if a natural boundary crosses multiple countries
         expanded_partials = []
@@ -1778,55 +1807,72 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
         })
         
     # Step 2: Combine base shape and additions for each party,
-    # and subtract those additions from all OTHER parties (losers) to prevent overlapping
+    # and subtract those additions from all OTHER parties (losers) to prevent overlapping.
+    # In conquest mode, we subtract the conqueror's entire final shape from all opponents.
+    conqueror_final_geom = None
+    if is_conquest and winner_polity:
+        for item in resolved_territories:
+            t_def = item["definition"]
+            is_winner = (winner_polity.lower() in t_def.name.lower() or t_def.name.lower() in winner_polity.lower())
+            if is_winner:
+                base_sh = item["base_geom"]
+                add_sh = item["additions_geom"]
+                if base_sh and add_sh:
+                    conqueror_final_geom = base_sh.union(add_sh)
+                elif add_sh:
+                    conqueror_final_geom = add_sh
+                else:
+                    conqueror_final_geom = base_sh
+                break
+                
     for i, item in enumerate(resolved_territories):
         t_def = item["definition"]
         base_sh = item["base_geom"]
         add_sh = item["additions_geom"]
         
-        # Start with base shape
-        final_sh = base_sh
-        if add_sh:
-            if final_sh:
-                # Merge base and additions
-                final_sh = final_sh.union(add_sh)
-            else:
-                # Just additions
-                final_sh = add_sh
-                
-        # Subtract additions of all other territories to prevent overlap (loser subtracts winner's gains)
-        for j, other_item in enumerate(resolved_territories):
-            if i == j:
-                continue
-            other_add = other_item["additions_geom"]
-            if other_add and final_sh:
-                # In conquest mode, do NOT subtract the loser's remaining additions from the winner!
-                # Only subtract the winner's additions (primary polity) from the losers.
-                base_pols = context.get("baseline_polities", []) if context else []
-                if mode == "expansion_conquest" and base_pols:
-                    primary_polity = base_pols[0].lower()
-                    this_name = t_def.name.lower()
-                    # If this is the winner (e.g. Umayyad), keep its baseline intact!
-                    if primary_polity in this_name:
-                        continue
+        is_winner = True
+        if is_conquest and winner_polity:
+            is_winner = (winner_polity.lower() in t_def.name.lower() or t_def.name.lower() in winner_polity.lower())
+            
+        if is_conquest and not is_winner:
+            # Opponent: final geometry is baseline shape minus the conqueror's final geometry
+            final_sh = base_sh
+            if final_sh and conqueror_final_geom:
                 try:
-                    final_sh = final_sh.difference(other_add)
+                    final_sh = final_sh.difference(conqueror_final_geom)
                     if getattr(final_sh, 'geom_type', None) == 'MultiPolygon':
                         from shapely.geometry import MultiPolygon
                         valid_polys = []
                         for p in final_sh.geoms:
-                            # Sliver filter: if a small piece was cut off and is adjacent to other_add, discard it
-                            if p.area < 0.1 and other_add and p.distance(other_add) < 0.1:
+                            # Sliver filter
+                            if p.area < 0.1 and conqueror_final_geom and p.distance(conqueror_final_geom) < 0.1:
                                 continue
                             valid_polys.append(p)
-                        if valid_polys:
-                            final_sh = MultiPolygon(valid_polys)
-                        else:
-                            final_sh = None
+                        final_sh = MultiPolygon(valid_polys) if valid_polys else None
                 except Exception as e:
-                    print(f"[SIMULATOR] Error subtracting geometry: {e}")
+                    print(f"[SIMULATOR] Error subtracting conqueror geometry from opponent {t_def.name}: {e}")
+            item["final_geom"] = final_sh
+        else:
+            # Winner or other modes (like partition/treaty)
+            final_sh = base_sh
+            if add_sh:
+                if final_sh:
+                    final_sh = final_sh.union(add_sh)
+                else:
+                    final_sh = add_sh
                     
-        item["final_geom"] = final_sh
+            if not is_conquest:
+                # Standard treaty partition mutual subtraction logic
+                for j, other_item in enumerate(resolved_territories):
+                    if i == j:
+                        continue
+                    other_add = other_item["additions_geom"]
+                    if other_add and final_sh:
+                        try:
+                            final_sh = final_sh.difference(other_add)
+                        except Exception as e:
+                            print(f"[SIMULATOR] Error subtracting geometry: {e}")
+            item["final_geom"] = final_sh
         
     # Step 3: Format back into GeoJSON Features
     features = []
