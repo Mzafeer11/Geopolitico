@@ -102,10 +102,6 @@ class AnomalyCheckResult(BaseModel):
     has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
     questions: List[ValidationAnomalyQuestion] = Field(default=[], description="List of questions to resolve the detected enclaves.")
 
-class ValidationTerritoriesResult(BaseModel):
-    territories: List[TerritoryChange] = Field(description="The audited and corrected list of all territories.")
-
-
 class TerritoryChange(BaseModel):
     name: str = Field(description="Name of the alternate history territory or empire.")
     type: str = Field(description="Type: empire, kingdom, republic, or region.")
@@ -119,6 +115,9 @@ class TerritoryChange(BaseModel):
     description: str = Field(description="Explanation of the territory's geopolitical significance.")
     population_estimate: Optional[str] = Field(None, description="Population estimate.")
     capital: Optional[str] = Field(None, description="Proposed/historical capital.")
+
+class ValidationTerritoriesResult(BaseModel):
+    territories: List[TerritoryChange] = Field(description="The audited and corrected list of all territories.")
 
 
 class TimelineEvent(BaseModel):
