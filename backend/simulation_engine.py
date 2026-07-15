@@ -355,7 +355,7 @@ def _check_geopolitical_anomalies(
                 )
                 feats = _process_territory_definitions(
                     [t_mock], year,
-                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": []}
+                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": [], "compounding_resolved_geoms": None}
                 )
                 for f in feats:
                     f["properties"]["color"] = "#2ecc71"
@@ -383,7 +383,7 @@ def _check_geopolitical_anomalies(
                 )
                 feats = _process_territory_definitions(
                     [t_mock], year,
-                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": []}
+                    {**context, "simulation_mode": "proposal_partition", "baseline_polities": [], "compounding_resolved_geoms": None}
                 )
                 for f in feats:
                     f["properties"]["color"] = "#ef4444"
