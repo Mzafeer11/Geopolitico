@@ -603,7 +603,10 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
                 
     ownership_str = "Baseline Territorial Control at the start of the simulation:\n"
     for polity, provs in baseline_ownership.items():
-        ownership_str += f"- {polity} currently controls: {', '.join(provs) if provs else 'None'}\n"
+        if len(provs) > 15:
+            ownership_str += f"- {polity} currently controls {len(provs)} provinces including: {', '.join(provs[:15])} ... [and {len(provs) - 15} more]\n"
+        else:
+            ownership_str += f"- {polity} currently controls: {', '.join(provs) if provs else 'None'}\n"
     print(f"[SIMULATOR] Ownership summary compiled:\n{ownership_str}")
  
     # Assemble answers string if present
@@ -613,13 +616,18 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         
     results = {}
     
+    # Truncate contested provinces list in prompt if too long to prevent token limit errors
+    prompt_contested = contested_provinces
+    if isinstance(prompt_contested, list) and len(prompt_contested) > 30:
+        prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
+    
     # Load dynamic prompts template variables
     prompt_vars = {
         "scenario": scenario,
         "year": year,
         "parties": parties,
         "ownership_str": ownership_str,
-        "contested_provinces": contested_provinces,
+        "contested_provinces": prompt_contested,
         "answers_str": answers_str,
         "demographics_context": demographics_context + gis_context
     }
