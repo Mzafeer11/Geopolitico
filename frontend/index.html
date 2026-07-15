@@ -79,6 +79,18 @@
             </div>
         </section>
 
+        <!-- Clarification / Geopolitical Decision Panel -->
+        <section id="clarification-section" class="panel-card">
+            <h2>Refine Simulation Outcomes</h2>
+            <p class="subtitle" style="font-size: 11px; margin-bottom: 20px; color: var(--text-muted);">The planner node has detected key geopolitical decisions. Please select the outcomes you wish to simulate:</p>
+            
+            <div id="clarification-questions-container" style="display:flex; flex-direction:column; gap:20px; overflow-y:auto; max-height:calc(100% - 180px); padding-right:5px;">
+                <!-- Dynamically populated questions categorized into Realistic and Optimistic -->
+            </div>
+            
+            <button id="submit-clarification-btn" class="primary-btn" style="margin-top: 25px;">Simulate Alternate History</button>
+        </section>
+
         <!-- Results & Analysis Panel -->
         <section id="results-section" class="panel-card">
             <div class="results-header-row">

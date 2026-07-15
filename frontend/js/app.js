@@ -18,6 +18,46 @@ function bindEvents() {
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
     const modeRiversBtn = document.getElementById("mode-rivers");
+    const submitClarificationBtn = document.getElementById("submit-clarification-btn");
+
+    if (submitClarificationBtn) {
+        submitClarificationBtn.addEventListener("click", () => {
+            const answers = {};
+            const selects = document.querySelectorAll("#clarification-questions-container select");
+            selects.forEach(sel => {
+                const qId = sel.id.replace("q-", "");
+                answers[qId] = sel.value;
+            });
+            
+            showPanel("loading-section");
+            document.getElementById("active-agent-display").innerText = "Resuming simulation with custom parameters...";
+            document.getElementById("progress-details-display").innerText = "Executing realistic and optimistic conquest models...";
+            
+            fetch("/api/simulate/resume", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    answers: answers
+                })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error("Failed to resume simulation");
+                return res.json();
+            })
+            .then(data => {
+                showToast("Parameters submitted. Queuing simulation...", "success");
+                pollJobStatus(data.job_id);
+            })
+            .catch(err => {
+                console.error(err);
+                showToast(err.message, "error");
+                showPanel("clarification-section");
+            });
+        });
+    }
 
     simulateBtn.addEventListener("click", () => {
         const scenario = document.getElementById("scenario-input").value.stripOrEmpty();
@@ -139,6 +179,10 @@ function pollJobStatus(jobId) {
                 clearInterval(pollInterval);
                 currentSessionId = job.session_id; // Store globally
                 displayResults(job.result);
+            } else if (job.status === "awaiting_clarification") {
+                clearInterval(pollInterval);
+                currentSessionId = job.session_id; // Store globally
+                displayClarificationQuestions(job.questions);
             } else if (job.status === "failed") {
                 clearInterval(pollInterval);
                 showToast(`Simulation failed: ${job.error}`, "error");
@@ -152,6 +196,90 @@ function pollJobStatus(jobId) {
             showPanel("input-section");
         });
     }, 2000);
+}
+
+function displayClarificationQuestions(questions) {
+    showPanel("clarification-section");
+    const container = document.getElementById("clarification-questions-container");
+    container.innerHTML = "";
+    
+    // Categorize questions
+    const realisticQuestions = questions.filter(q => q.scenario_type === "realistic");
+    const optimisticQuestions = questions.filter(q => q.scenario_type === "optimistic");
+    const generalQuestions = questions.filter(q => q.scenario_type !== "realistic" && q.scenario_type !== "optimistic");
+    
+    if (realisticQuestions.length > 0) {
+        const header = document.createElement("h3");
+        header.style.color = "#fbbf24";
+        header.style.fontSize = "12px";
+        header.style.fontWeight = "600";
+        header.style.marginTop = "10px";
+        header.style.textTransform = "uppercase";
+        header.innerText = "🔍 Realistic Scenario Parameters";
+        container.appendChild(header);
+        
+        realisticQuestions.forEach(q => renderQuestion(q, container));
+    }
+    
+    if (optimisticQuestions.length > 0) {
+        const header = document.createElement("h3");
+        header.style.color = "#2ecc71";
+        header.style.fontSize = "12px";
+        header.style.fontWeight = "600";
+        header.style.marginTop = "15px";
+        header.style.textTransform = "uppercase";
+        header.innerText = "⚡ Optimistic Scenario Parameters (Generous)";
+        container.appendChild(header);
+        
+        optimisticQuestions.forEach(q => renderQuestion(q, container));
+    }
+    
+    if (generalQuestions.length > 0) {
+        const header = document.createElement("h3");
+        header.style.color = "#a78bfa";
+        header.style.fontSize = "12px";
+        header.style.fontWeight = "600";
+        header.style.marginTop = "15px";
+        header.style.textTransform = "uppercase";
+        header.innerText = "⚙️ General Parameters";
+        container.appendChild(header);
+        
+        generalQuestions.forEach(q => renderQuestion(q, container));
+    }
+}
+
+function renderQuestion(q, container) {
+    const group = document.createElement("div");
+    group.className = "input-group";
+    group.style.marginBottom = "12px";
+    
+    const label = document.createElement("label");
+    label.innerText = q.question;
+    label.style.display = "block";
+    label.style.marginBottom = "5px";
+    label.style.fontSize = "11px";
+    group.appendChild(label);
+    
+    const select = document.createElement("select");
+    select.id = `q-${q.id}`;
+    select.style.width = "100%";
+    select.style.padding = "8px 10px";
+    select.style.background = "rgba(255,255,255,0.06)";
+    select.style.border = "1px solid rgba(255,255,255,0.12)";
+    select.style.borderRadius = "4px";
+    select.style.color = "#fff";
+    select.style.fontSize = "12px";
+    
+    q.options.forEach(opt => {
+        const option = document.createElement("option");
+        option.value = opt;
+        option.innerText = opt;
+        option.style.background = "#161c2d";
+        select.appendChild(option);
+    });
+    
+    group.appendChild(select);
+    container.appendChild(group);
 }
 
 // Bind Refinement panel triggers

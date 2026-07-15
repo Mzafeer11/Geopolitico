@@ -35,6 +35,13 @@ BOUNDARY_COUNTRIES_MAP = {
 
 # ─── Pydantic Output Schemas ──────────────────────────────────────────────────
 
+class ClarifyingQuestion(BaseModel):
+    id: str = Field(description="Unique snake_case identifier for this question (e.g. 'boundary_selection').")
+    question: str = Field(description="The question text to show the user.")
+    options: List[str] = Field(description="List of choices representing different geopolitical outcomes.")
+    scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this choice applies to the realistic (conservative) or optimistic (generous) scenario.")
+
+
 class PlanningResult(BaseModel):
     year: int = Field(description="The target base year of the simulation context.")
     parties: List[str] = Field(description="The primary historical/modern states/parties involved in the scenario (e.g. ['Umayyad Caliphate', 'Kingdom of the Franks']).")
@@ -46,7 +53,7 @@ class PlanningResult(BaseModel):
     target_countries: List[str] = Field(default=[], description="List of modern sovereign countries containing the conflict zone (e.g. ['France', 'Spain'] or ['India', 'Pakistan']).")
     baseline_description: str = Field(description="Brief explanation of the real-world historical context of the base year.")
     needs_clarification: bool = Field(description="True if the prompt has significant branch decisions where user input is required.")
-    clarifying_questions: List[str] = Field(default=[], description="List of 2-3 multiple choice questions for the user to refine simulation parameters if needs_clarification is True.")
+    clarifying_questions: List[ClarifyingQuestion] = Field(default=[], description="List of 2-4 structured multiple choice questions to refine realistic (conservative options) and optimistic (generous options) parameters.")
 
 
 class SequentialScenarioPlan(BaseModel):
@@ -470,9 +477,18 @@ Ensure both years are realistic and match the historical conflicts."""
         # Override the base context year to year_1 initially
         context["year"] = split_plan.year_1
         
+    context["clarifying_questions"] = [q.model_dump() for q in plan.clarifying_questions]
     _sessions[session_id] = context
     
-    # Proceed directly to final simulation
+    if plan.clarifying_questions:
+        print(f"[SIMULATOR] Pausing simulation for {len(plan.clarifying_questions)} clarifying questions...", flush=True)
+        return {
+            "status": "awaiting_clarification",
+            "session_id": session_id,
+            "questions": context["clarifying_questions"]
+        }
+        
+    # Proceed directly to final simulation if no questions
     res = _run_final_simulation(context, answers=None)
     res["session_id"] = session_id
     # Append the guardrail logs to the results so the frontend can display them to the user
@@ -481,6 +497,17 @@ Ensure both years are realistic and match the historical conflicts."""
         "refined_prompt": refined_scenario,
         "corrections_made": guardrail.get("corrections_made", "None")
     }
+    return res
+
+
+def simulate_resume(session_id: str, answers: Dict[str, str]) -> Dict[str, Any]:
+    """Resume the simulation pipeline using user answered parameters."""
+    context = _sessions.get(session_id)
+    if not context:
+        raise ValueError("Invalid or expired session ID.")
+        
+    res = _run_final_simulation(context, answers=answers)
+    res["session_id"] = session_id
     return res
 
 
@@ -508,7 +535,8 @@ def _run_conquest_sim(
     context_val: dict,
     stage_num: int = 1,
     baselines_override_real: dict = None,
-    baselines_override_opt: dict = None
+    baselines_override_opt: dict = None,
+    answers: Optional[Dict[str, str]] = None
 ):
     from shapely.geometry import shape
     from shapely.ops import unary_union
@@ -639,9 +667,36 @@ def _run_conquest_sim(
             f"absorb Turkey, Constantinople, or Greece, as those are now owned by the Umayyad Caliphate!"
         )
         
+    realistic_answers_str = ""
+    optimistic_answers_str = ""
+    if answers and "clarifying_questions" in context_val:
+        questions = context_val["clarifying_questions"]
+        real_parts = []
+        opt_parts = []
+        for q_id, ans in answers.items():
+            matching_q = None
+            for q in questions:
+                if q.get("id") == q_id:
+                    matching_q = q
+                    break
+            if matching_q:
+                type_ = matching_q.get("scenario_type")
+                question_text = matching_q.get("question")
+                if type_ == "realistic":
+                    real_parts.append(f"{question_text} Selected Choice: {ans}")
+                elif type_ == "optimistic":
+                    opt_parts.append(f"{question_text} Selected Choice: {ans}")
+        if real_parts:
+            realistic_answers_str = "\nCRITICAL USER OUTCOME CHOICES FOR REALISTIC SCENARIO:\n" + "\n".join(f"- {p}" for p in real_parts)
+        if opt_parts:
+            optimistic_answers_str = "\nCRITICAL USER OUTCOME CHOICES FOR OPTIMISTIC SCENARIO:\n" + "\n".join(f"- {p}" for p in opt_parts)
+
     template_real = _load_prompt_template("expansion_conquest.txt")
     if template_real:
-        prompt_vars["target_instructions"] = target_instructions.format(year=year_val)
+        target_instr_real = target_instructions.format(year=year_val)
+        if realistic_answers_str:
+            target_instr_real += f"\n{realistic_answers_str}\nYou MUST simulate the realistic scenario strictly respecting the user choices listed above. If the choice is a specific boundary or none, adjust the territories to match exactly."
+        prompt_vars["target_instructions"] = target_instr_real
         prompt_vars["real_conquests_context"] = ""
         prompt_vars["conquest_type"] = "REALISTIC military simulation: Annex only logically contiguous, nearby border provinces that are physically close to the baseline territory and easily defensible. Do NOT let the empire expand excessively."
         
@@ -675,7 +730,10 @@ def _run_conquest_sim(
             real_conquests_str += f"- {t.name} conquered: " + "; ".join(conquest_parts) + "\n"
             
     if template_real:
-        prompt_vars["target_instructions"] = target_instructions.format(year=year_val)
+        target_instr_opt = target_instructions.format(year=year_val)
+        if optimistic_answers_str:
+            target_instr_opt += f"\n{optimistic_answers_str}\nYou MUST simulate the optimistic scenario strictly respecting the user choices listed above. If the choice is a specific boundary or region, adjust the territories to match exactly."
+        prompt_vars["target_instructions"] = target_instr_opt
         
         if stage_num == 2 and baselines_override_opt:
             stage1_opt = context_val.get("stage1_opt_conquests_str", "")
@@ -1127,7 +1185,7 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         resolved_real_1 = {}
         context_1["compounding_resolved_geoms"] = resolved_real_1
         res_real_1, res_opt_1, realistic_features_1, optimistic_features_1 = _run_conquest_sim(
-            scenario_1, year_1, context_1, stage_num=1
+            scenario_1, year_1, context_1, stage_num=1, answers=answers
         )
         
         # Extract Stage 1 Optimistic geometries
@@ -1180,7 +1238,8 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         res_real_2, res_opt_2, realistic_features_2, optimistic_features_2 = _run_conquest_sim(
             scenario_2, year_2, context_2, stage_num=2,
             baselines_override_real=resolved_real_1,
-            baselines_override_opt=resolved_opt_1
+            baselines_override_opt=resolved_opt_1,
+            answers=answers
         )
         
         # Combine narratives and timelines from both stages chronologically
@@ -1219,7 +1278,7 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     else:  # expansion_conquest
         print("[SIMULATOR] Executing standard expansion conquest simulation...")
         res_real, res_opt, realistic_features, optimistic_features = _run_conquest_sim(
-            scenario, year, context, stage_num=1
+            scenario, year, context, stage_num=1, answers=answers
         )
         
         results["title"] = res_real.title
