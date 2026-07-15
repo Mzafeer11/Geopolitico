@@ -95,8 +95,6 @@ class ValidationAnomalyQuestion(BaseModel):
     scenario_type: Literal["realistic", "optimistic"] = Field(description="Whether this anomaly is in the realistic or optimistic result.")
     option_1: EnclaveResolutionOption = Field(description="Option 1: Add connecting land bridge.")
     option_2: EnclaveResolutionOption = Field(description="Option 2: Pull back and remove enclave.")
-    option_1_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated green highlight GeoJSON features for Option 1.")
-    option_2_geojson: Optional[Dict[str, Any]] = Field(None, description="Pre-calculated red highlight GeoJSON features for Option 2.")
 
 class AnomalyCheckResult(BaseModel):
     has_anomalies: bool = Field(description="True if major disconnected enclaves/gaps are found.")
@@ -328,11 +326,14 @@ def _check_geopolitical_anomalies(
         
         if not checker_res.has_anomalies or not checker_res.questions:
             print("[SIMULATOR] No major contiguity enclaves detected.", flush=True)
-            return AnomalyCheckResult(has_anomalies=False, questions=[])
+            return False, []
             
         # Pre-calculate highlight GeoJSON features for each option
         print(f"[SIMULATOR] Detected {len(checker_res.questions)} major anomalies. Pre-calculating highlight layers...", flush=True)
+        questions_with_geojson = []
         for q in checker_res.questions:
+            q_dict = q.model_dump()
+            
             # Option 1: Addition (Green)
             opt1 = q.option_1
             feat_list_1 = []
@@ -357,7 +358,7 @@ def _check_geopolitical_anomalies(
                     f["properties"]["color"] = "#2ecc71"
                     f["properties"]["description"] = f"Proposed Addition: {opt1.description}"
                 feat_list_1 = feats
-            q.option_1_geojson = {"type": "FeatureCollection", "features": feat_list_1}
+            q_dict["option_1_geojson"] = {"type": "FeatureCollection", "features": feat_list_1}
             
             # Option 2: Subtraction (Red)
             opt2 = q.option_2
@@ -382,13 +383,15 @@ def _check_geopolitical_anomalies(
                     f["properties"]["color"] = "#ef4444"
                     f["properties"]["description"] = f"Proposed Subtraction: {opt2.description}"
                 feat_list_2 = feats
-            q.option_2_geojson = {"type": "FeatureCollection", "features": feat_list_2}
+            q_dict["option_2_geojson"] = {"type": "FeatureCollection", "features": feat_list_2}
             
-        return checker_res
+            questions_with_geojson.append(q_dict)
+            
+        return True, questions_with_geojson
     except Exception as e:
         print(f"[WARN] Geopolitical Anomaly Inspector failed: {e}", flush=True)
         traceback.print_exc()
-        return AnomalyCheckResult(has_anomalies=False, questions=[])
+        return False, []
 
 
 # ─── Spatial Contest Finder ──────────────────────────────────────────────────
@@ -1559,15 +1562,15 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
             pending_opt = locals()['res_opt']
             
     if pending_real and pending_opt:
-        checker = _check_geopolitical_anomalies(pending_real, pending_opt, scenario, year, context)
-        if checker.has_anomalies and checker.questions:
+        has_anomalies, questions_list = _check_geopolitical_anomalies(pending_real, pending_opt, scenario, year, context)
+        if has_anomalies and questions_list:
             # Save state in context for simulate_verify
             context["pending_real_result"] = pending_real.model_dump()
             context["pending_opt_result"] = pending_opt.model_dump()
-            context["anomalies"] = [q.model_dump() for q in checker.questions]
+            context["anomalies"] = questions_list
             _sessions[context["session_id"]] = context
             
-            print(f"[SIMULATOR] Pausing simulation for user validation choice on {len(checker.questions)} anomalies...", flush=True)
+            print(f"[SIMULATOR] Pausing simulation for user validation choice on {len(questions_list)} anomalies...", flush=True)
             return {
                 "status": "awaiting_verification",
                 "session_id": context["session_id"],
