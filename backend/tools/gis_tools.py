@@ -75,6 +75,15 @@ def natural_boundary_tool(name: str) -> Dict[str, Any]:
             q = q.replace(suffix, "")
         q = q.strip()
         
+        # Spelling variations for natural boundaries
+        q_variants = [q]
+        if q == "rhine":
+            q_variants.extend(["rhein", "rhin"])
+        elif q == "danube":
+            q_variants.extend(["donau", "dunav", "duna"])
+        elif q == "rhone":
+            q_variants.extend(["rhône", "roten"])
+        
         # Check pre-packaged boundaries first
         if q in OFFLINE_BOUNDARIES:
             print(f"[OFFLINE GIS] Successfully loaded pre-packaged offline coordinates for '{name}'.", flush=True)
@@ -150,9 +159,11 @@ def natural_boundary_tool(name: str) -> Dict[str, Any]:
                         matched = False
                         for key in name_keys:
                             val = props.get(key)
-                            if val and q in str(val).lower():
-                                matched = True
-                                break
+                            if val:
+                                val_str = str(val).lower()
+                                if any(var in val_str for var in q_variants):
+                                    matched = True
+                                    break
                         if matched:
                             geom = feat.get("geometry", {})
                             gtype = geom.get("type")
