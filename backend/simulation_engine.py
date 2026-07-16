@@ -680,6 +680,8 @@ def simulate_verify(session_id: str, selections: Dict[str, str]) -> Dict[str, An
             for country in countries_abs:
                 if country not in winner_t.countries_absorbed:
                     winner_t.countries_absorbed.append(country)
+                # Remove from partials if present to maintain mutual exclusivity
+                winner_t.partial_countries = [p for p in winner_t.partial_countries if p.country.lower() != country.lower()]
             for part in partial_countries_list:
                 part_reg = PartialRegion(**part) if isinstance(part, dict) else part
                 # Check if country already exists in winner's partial list
@@ -875,7 +877,7 @@ def _run_conquest_sim(
     scenario_lower = scenario_val.lower()
     targets = []
     if "constantinople" in scenario_lower:
-        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. You MUST also annex Anatolia/Turkey: add a partial_country for Turkey, setting 'clip_method: natural_boundary', 'clip_description: Bosphorus', and 'clip_direction: south_of_natural_boundary' (or list the provinces).")
+        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. For the OPTIMISTIC scenario, you MUST fully annex Turkey by adding 'Turkey' to 'countries_absorbed'. For the REALISTIC scenario, only annex the European Turkey / Marmara provinces (such as 'Istanbul', 'Edirne', 'Kırklareli', 'Tekirdağ', 'Çanakkale', 'Kocaeli', 'Bursa') and do NOT add Turkey to 'partial_countries' with Bosphorus clipping.")
     if "tours" in scenario_lower or "poitiers" in scenario_lower:
         targets.append("- The Battle of Tours was won. Therefore, you MUST annex key French provinces (such as 'Vienne (France)', 'Indre (France)', 'Indre-et-Loire (France)', 'Haute-Vienne (France)', 'Deux-Sèvres (France)') to the Umayyad Caliphate. You MUST also annex all of Southern France up to the Loire: add a partial_country for France, setting 'clip_method: natural_boundary', 'clip_description: Loire River', and 'clip_direction: south_of_natural_boundary'.")
         
@@ -1037,12 +1039,18 @@ def _run_conquest_sim(
         context_val["stage2_baselines"] = baselines_override_real
     else:
         context_val.pop("stage2_baselines", None)
+    
+    if "compounding_resolved_geoms_real" in context_val:
+        context_val["compounding_resolved_geoms"] = context_val["compounding_resolved_geoms_real"]
     realistic_features = _process_territory_definitions(res_real.territories, year_val, context_val)
     
     if baselines_override_opt:
         context_val["stage2_baselines"] = baselines_override_opt
     else:
         context_val.pop("stage2_baselines", None)
+        
+    if "compounding_resolved_geoms_opt" in context_val:
+        context_val["compounding_resolved_geoms"] = context_val["compounding_resolved_geoms_opt"]
     optimistic_features = _process_territory_definitions(res_opt.territories, year_val, context_val)
     
     context_val.pop("stage2_baselines", None)
@@ -1430,17 +1438,14 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         context_1["scenario"] = scenario_1
         context_1["simulation_mode"] = "expansion_conquest"
         
-        # Set collector to extract Stage 1 geometries
+        # Set collectors to extract Stage 1 geometries
         resolved_real_1 = {}
-        context_1["compounding_resolved_geoms"] = resolved_real_1
+        resolved_opt_1 = {}
+        context_1["compounding_resolved_geoms_real"] = resolved_real_1
+        context_1["compounding_resolved_geoms_opt"] = resolved_opt_1
         res_real_1, res_opt_1, realistic_features_1, optimistic_features_1 = _run_conquest_sim(
             scenario_1, year_1, context_1, stage_num=1, answers=answers
         )
-        
-        # Extract Stage 1 Optimistic geometries
-        resolved_opt_1 = {}
-        context_1["compounding_resolved_geoms"] = resolved_opt_1
-        _process_territory_definitions(res_opt_1.territories, year_1, context_1)
         
         # Build Stage 1 conquests summaries to pass to Stage 2
         real_conquests_str_1 = ""
