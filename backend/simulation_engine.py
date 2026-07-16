@@ -1698,17 +1698,24 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
     # 4. Check for major geopolitical anomalies (disconnected enclaves/gaps)
     pending_real = None
     pending_opt = None
+    real_feats = []
+    opt_feats = []
+    
     if mode == "compounding_conquest":
         if 'res_real_2' in locals() and 'res_opt_2' in locals():
             pending_real = locals()['res_real_2']
             pending_opt = locals()['res_opt_2']
+            real_feats = locals().get('realistic_features_2', [])
+            opt_feats = locals().get('optimistic_features_2', [])
     elif mode in ["expansion_conquest", "demographic_shift"]:
         if 'res_real' in locals() and 'res_opt' in locals():
             pending_real = locals()['res_real']
             pending_opt = locals()['res_opt']
+            real_feats = locals().get('realistic_features', [])
+            opt_feats = locals().get('optimistic_features', [])
             
     if pending_real and pending_opt:
-        has_anomalies, questions_list = _check_geopolitical_anomalies(pending_real, pending_opt, realistic_features, optimistic_features, scenario, year, context)
+        has_anomalies, questions_list = _check_geopolitical_anomalies(pending_real, pending_opt, real_feats, opt_feats, scenario, year, context)
         if has_anomalies and questions_list:
             # Save state in context for simulate_verify
             context["pending_real_result"] = pending_real.model_dump()
