@@ -1508,6 +1508,14 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
             f"Stage 1 (Constantinople - Optimistic): {res_opt_1.alternate_outcome}\n"
             f"Stage 2 (Tours - Optimistic): {res_opt_2.alternate_outcome}"
         )
+        results["alternate_outcome_realistic"] = (
+            f"Stage 1 (Constantinople): {res_real_1.alternate_outcome}\n\n"
+            f"Stage 2 (Tours): {res_real_2.alternate_outcome}"
+        )
+        results["alternate_outcome_optimistic"] = (
+            f"Stage 1 (Constantinople): {res_opt_1.alternate_outcome}\n\n"
+            f"Stage 2 (Tours): {res_opt_2.alternate_outcome}"
+        )
         results["key_changes"] = list(set(res_real_1.key_changes + res_opt_1.key_changes + res_real_2.key_changes + res_opt_2.key_changes))
         results["realistic_scenario_summary"] = "Compounded realistic sequential outcomes with moral momentum."
         results["optimistic_scenario_summary"] = "Maximum compounded territorial expansion across all theatres."
@@ -1541,6 +1549,8 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         
         results["title"] = res_real.title
         results["alternate_outcome"] = f"Realistic: {res_real.alternate_outcome}\n\nOptimistic: {res_opt.alternate_outcome}"
+        results["alternate_outcome_realistic"] = res_real.alternate_outcome
+        results["alternate_outcome_optimistic"] = res_opt.alternate_outcome
         results["key_changes"] = list(set(res_real.key_changes + res_opt.key_changes))
         results["realistic_scenario_summary"] = "Plausible conquest limits and client states."
         results["optimistic_scenario_summary"] = "Maximum territorial annexations and tributary states."

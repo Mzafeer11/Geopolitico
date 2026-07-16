@@ -235,6 +235,16 @@ function setMapMode(mode) {
     currentMode = mode;
     updateMapLayers();
     syncActiveLegendAndSummary();
+    
+    // Update narrative text to match the active map mode
+    const alternateEl = document.getElementById("result-alternate");
+    if (alternateEl && window.activeScenarioData) {
+        const data = window.activeScenarioData;
+        const alternateText = (mode === "realistic" || mode === "rivers") ? 
+            (data.alternate_outcome_realistic || data.alternate_outcome || "") : 
+            (data.alternate_outcome_optimistic || data.alternate_outcome || "");
+        alternateEl.innerText = alternateText;
+    }
 }
 
 // ─── Sandbox Mode Map Rendering ─────────────────────────────────────────────

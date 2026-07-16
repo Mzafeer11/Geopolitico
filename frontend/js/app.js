@@ -493,9 +493,13 @@ function displayResults(result) {
     const actualEl = document.getElementById("result-actual");
     const alternateEl = document.getElementById("result-alternate");
     
+    const alternateText = (currentMode === "realistic" || currentMode === "rivers") ? 
+        (result.alternate_outcome_realistic || result.alternate_outcome || "") : 
+        (result.alternate_outcome_optimistic || result.alternate_outcome || "");
+        
     typeWriter(contextEl, result.historical_context || "", 10, () => {
         typeWriter(actualEl, result.what_actually_happened || "", 10, () => {
-            typeWriter(alternateEl, result.alternate_outcome || "", 10);
+            typeWriter(alternateEl, alternateText, 10);
         });
     });
     
