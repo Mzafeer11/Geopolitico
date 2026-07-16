@@ -3,6 +3,7 @@ import json
 import uuid
 import traceback
 import httpx
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
@@ -16,7 +17,16 @@ from backend.tools.gis_tools import geocode_landmark_tool, natural_boundary_tool
 
 # ─── Session Store ───────────────────────────────────────────────────────────
 _sessions: Dict[str, Dict[str, Any]] = {}
+
+# Load persistently blacklisted models from JSON cache
+_BLACKLIST_FILE = Path(DATA_DIR) / "blacklisted_models.json"
 _BLACKLISTED_MODELS = set()
+if _BLACKLIST_FILE.exists():
+    try:
+        with open(_BLACKLIST_FILE, "r") as _f:
+            _BLACKLISTED_MODELS = set(json.load(_f))
+    except Exception:
+        pass
 
 # ─── Natural Boundaries mapping ──────────────────────────────────────────────
 BOUNDARY_COUNTRIES_MAP = {
@@ -136,9 +146,13 @@ class ScenarioStateResult(BaseModel):
 def _get_active_model() -> str:
     """Get the first non-exhausted model, prioritizing GPT-4o models for stable schema generation."""
     available = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
+    # Filter out nano models
+    available = [m for m in available if "nano" not in m.lower()]
+    
     if not available:
         EXHAUSTED_MODELS.clear()
         available = [m for m in GITHUB_MODELS if m not in _BLACKLISTED_MODELS]
+        available = [m for m in available if "nano" not in m.lower()]
     
     # Prioritize GPT-4o models
     for m in available:
@@ -150,9 +164,18 @@ def _get_active_model() -> str:
 def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
     """Tries to invoke structured output, falling back to other models on RateLimitError."""
     available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
+    # Filter out nano models from structured outputs
+    available_models = [m for m in available_models if "nano" not in m.lower()]
+    
     if not available_models:
         EXHAUSTED_MODELS.clear()
-        available_models = [m for m in GITHUB_MODELS if m not in _BLACKLISTED_MODELS]
+        _BLACKLISTED_MODELS.clear()
+        try:
+            if _BLACKLIST_FILE.exists():
+                _BLACKLIST_FILE.unlink()
+        except Exception:
+            pass
+        available_models = [m for m in GITHUB_MODELS if "nano" not in m.lower()]
         
     # Prioritize GPT-5 models first, then GPT-4o/4.1 models
     attempt_list = []
@@ -207,6 +230,11 @@ def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
             if "rate limit" in err_msg or "429" in err_msg or "quota" in err_msg or "not found" in err_msg or "too many requests" in err_msg:
                 EXHAUSTED_MODELS.add(model)
                 _BLACKLISTED_MODELS.add(model)
+                try:
+                    with open(_BLACKLIST_FILE, "w") as _f:
+                        json.dump(list(_BLACKLISTED_MODELS), _f)
+                except Exception:
+                    pass
                 print(f"[SIMULATOR] Permanently blacklisting model '{clean_model}' from further attempts.", flush=True)
                 
     raise last_error or RuntimeError("All models failed to complete structured schema generation.")
@@ -1010,9 +1038,11 @@ def _run_conquest_sim(
         if stage_num == 2:
             prompt_vars["conquest_type"] = (
                 "OPTIMISTIC compounding simulation: This is a BEST-CASE scenario with maximum compounding power and moral from winning both wars. "
-                "You MUST expand significantly beyond the realistic conquests. For example, since they won Tours with Constantinople already secured, "
-                "they should conquer most of France up to the Rhine River (use 'Rhine River' as natural boundary with 'clip_direction: west_of_natural_boundary') "
-                "and expand deeply into the Balkans (fully annexing Greece and Bulgaria, or setting 'clip_description: Danube River' for Bulgaria)."
+                "You MUST expand significantly beyond the realistic conquests. Since they won Tours with Constantinople already secured, "
+                "they should conquer most of Western Europe up to the Rhine River. Because the Rhine River runs through multiple countries, "
+                "you MUST add partial_country definitions for France, Germany, Netherlands, and Switzerland (all setting 'clip_method: natural_boundary', "
+                "'clip_description: Rhine River', 'clip_direction: west_of_natural_boundary') and fully absorb Belgium by adding 'Belgium' to 'countries_absorbed'. "
+                "You must also expand deeply into the Balkans (fully annexing Greece and Bulgaria, or setting 'clip_description: Danube River' for Bulgaria)."
             )
         else:
             prompt_vars["conquest_type"] = (

@@ -23,9 +23,23 @@ Your task is to review the user's alternate history scenario prompt and:
 def refine_user_prompt(scenario: str) -> Dict[str, Any]:
     """Refine user prompt for spelling, grammar, and historical consistency."""
     # Find active model (prioritize gpt-4o for structured output)
-    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS]
+    # Load persistently blacklisted models
+    _BLACKLISTED_MODELS = set()
+    from backend.config import DATA_DIR
+    from pathlib import Path
+    import json
+    _BLACKLIST_FILE = Path(DATA_DIR) / "blacklisted_models.json"
+    if _BLACKLIST_FILE.exists():
+        try:
+            with open(_BLACKLIST_FILE, "r") as _f:
+                _BLACKLISTED_MODELS = set(json.load(_f))
+        except Exception:
+            pass
+
+    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
+    available_models = [m for m in available_models if "nano" not in m.lower()]
     if not available_models:
-        available_models = GITHUB_MODELS.copy()
+        available_models = [m for m in GITHUB_MODELS if "nano" not in m.lower()]
         
     model_to_use = None
     for m in available_models:

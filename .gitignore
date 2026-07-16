@@ -26,3 +26,4 @@ test_*.py
 # Large Data & Cache Files
 data/*.geojson
 data/whg_cache/
+data/blacklisted_models.json
