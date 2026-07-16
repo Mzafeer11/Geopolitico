@@ -408,6 +408,76 @@ def _check_geopolitical_anomalies(
             print("[SIMULATOR] No major contiguity enclaves detected.", flush=True)
             return False, []
             
+        # Filter out questions that are false positives (where enclave territories connect to baseline)
+        from shapely.ops import unary_union
+        filtered_questions = []
+        for q in checker_res.questions:
+            baseline_geom = None
+            if winner_polity:
+                # Use scenario-specific compounding baselines if available
+                stage2_baselines = context.get("compounding_baselines_real" if q.scenario_type == "realistic" else "compounding_baselines_opt")
+                if stage2_baselines and winner_polity in stage2_baselines:
+                    baseline_geom = stage2_baselines[winner_polity]
+                else:
+                    hist_feat = cliopatria_db.get_polity_geometry(winner_polity, year)
+                    if hist_feat and hist_feat.get("geometry"):
+                        try:
+                            baseline_geom = shape(hist_feat["geometry"])
+                        except Exception:
+                            pass
+            
+            if not baseline_geom:
+                # If we cannot verify, keep the enclave warning for safety
+                filtered_questions.append(q)
+                continue
+                
+            sub_countries = [c.lower() for c in q.option_2.countries_absorbed]
+            sub_partials = [p.get("country", "").lower() if isinstance(p, dict) else p.country.lower() for p in q.option_2.partial_countries]
+            all_sub_names = set(sub_countries + sub_partials)
+            
+            if not all_sub_names:
+                filtered_questions.append(q)
+                continue
+                
+            target_features = realistic_features if q.scenario_type == "realistic" else optimistic_features
+            main_body_shapes = [baseline_geom]
+            enclave_shapes = []
+            
+            for feat in target_features:
+                props = feat.get("properties", {})
+                c_name = props.get("country", "") or props.get("name", "")
+                if c_name:
+                    try:
+                        feat_shape = shape(feat["geometry"])
+                        if c_name.lower() in all_sub_names:
+                            enclave_shapes.append(feat_shape)
+                        else:
+                            main_body_shapes.append(feat_shape)
+                    except Exception:
+                        pass
+                        
+            try:
+                main_body_union = unary_union(main_body_shapes)
+                is_disconnected = False
+                for es in enclave_shapes:
+                    if es.disjoint(main_body_union.buffer(0.05)):
+                        is_disconnected = True
+                        break
+                if is_disconnected:
+                    filtered_questions.append(q)
+                    print(f"[SIMULATOR] Geometric Contiguity check CONFIRMED enclave for question '{q.id}'.", flush=True)
+                else:
+                    print(f"[SIMULATOR] Geometric Contiguity check SUPPRESSED false enclave question '{q.id}' (connected to baseline).", flush=True)
+            except Exception as geom_err:
+                print(f"[WARN] Geometry contiguity check error for '{q.id}': {geom_err}", flush=True)
+                filtered_questions.append(q)
+                
+        checker_res.questions = filtered_questions
+        if not filtered_questions:
+            checker_res.has_anomalies = False
+            print("[SIMULATOR] All detected enclaves were suppressed programmatically as contiguous.", flush=True)
+            return False, []
+            
         # Pre-calculate highlight GeoJSON features for each option
         print(f"[SIMULATOR] Detected {len(checker_res.questions)} major anomalies. Pre-calculating highlight layers...", flush=True)
         questions_with_geojson = []
@@ -975,7 +1045,7 @@ def _run_conquest_sim(
     scenario_lower = scenario_val.lower()
     targets = []
     if "constantinople" in scenario_lower:
-        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. For the OPTIMISTIC scenario, you MUST fully annex Turkey by adding 'Turkey' to 'countries_absorbed'. For the REALISTIC scenario, only annex the European Turkey / Marmara provinces (such as 'Istanbul', 'Edirne', 'Kırklareli', 'Tekirdağ', 'Çanakkale', 'Kocaeli', 'Bursa') and do NOT add Turkey to 'partial_countries' with Bosphorus clipping.")
+        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. For the OPTIMISTIC scenario, you MUST fully annex Turkey by adding 'Turkey' to 'countries_absorbed' and you can expand deep into the Balkans. For the REALISTIC scenario, only annex the European Turkey / Marmara provinces (such as 'Istanbul', 'Edirne', 'Kırklareli', 'Tekirdağ', 'Çanakkale', 'Kocaeli', 'Bursa') but note that you are allowed to expand beyond Turkey/Marmara if plausible.")
     if "tours" in scenario_lower or "poitiers" in scenario_lower:
         targets.append("- The Battle of Tours was won. Therefore, you MUST annex key French provinces (such as 'Vienne (France)', 'Indre (France)', 'Indre-et-Loire (France)', 'Haute-Vienne (France)', 'Deux-Sèvres (France)') to the Umayyad Caliphate. You MUST also annex all of Southern France up to the Loire: add a partial_country for France, setting 'clip_method: natural_boundary', 'clip_description: Loire River', and 'clip_direction: south_of_natural_boundary'.")
         

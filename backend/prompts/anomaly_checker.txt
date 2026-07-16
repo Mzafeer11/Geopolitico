@@ -13,8 +13,11 @@ Your task is to inspect the conqueror's territories for disconnected enclaves or
 1. MINOR OR SMALL GAPS:
 - If the gap is small or minor (e.g., small border provinces or minor adjustments), do NOT flag it as an anomaly. These will be automatically corrected in downstream validation.
 
-2. MAJOR OR FAR ENCLAVES:
-- If there is a major, far-off enclave that is physically disconnected from the baseline territory (e.g. conquering Greece/Bulgaria but leaving Constantinople/Thrace unconquered, or conquering a distant enclave deep inside enemy territory without any land bridge), flag it as a major anomaly.
+2. DEFINITION OF AN ENCLAVE & MAJOR GAPS:
+- An enclave is a conquered territory that is completely isolated and has no land connection to the starting baseline territory of the empire.
+- If a conquered territory is directly connected to the starting baseline territory of the empire (e.g., France connects to Spain, or Greece connects to Turkey which connects to Syria/Middle East), it is NOT an enclave, regardless of how far it is from other conquered provinces.
+- A gap of neutral or unconquered countries between two different expansion fronts (like between France in the West and Bulgaria in the East) is normal and is NOT an enclave, because both fronts connect back to the core empire baseline. Do NOT flag these as anomalies.
+- You must ONLY flag an anomaly if a conquered territory is a major, far-off enclave that has absolutely no land connection to any baseline territory.
 - Do NOT flag a territory as an enclave if it is already contiguous to the starting baseline territory or connected via other conquered territories that trace back to the baseline.
 - Specifically: If the Caliphate has already conquered/controlled Turkey AND Constantinople/Thrace, then Greece and Bulgaria are contiguous to the empire and there is NO enclave. Do NOT flag Greece or Bulgaria as an enclave under these circumstances.
 - Verify if the connecting countries/regions are already in the baseline territory list or the conquered list. If they are, there is no anomaly. Do not flag already-conquered or baseline territories as enclaves.
