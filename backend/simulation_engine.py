@@ -2396,6 +2396,12 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                 final_sh = item["final_geom"]
                 if final_sh and not final_sh.is_empty:
                     compounding_resolved[t.name] = final_sh
-                    compounding_resolved[actual_name] = final_sh
+                    if actual_name in compounding_resolved:
+                        try:
+                            compounding_resolved[actual_name] = compounding_resolved[actual_name].union(final_sh)
+                        except Exception:
+                            compounding_resolved[actual_name] = final_sh
+                    else:
+                        compounding_resolved[actual_name] = final_sh
         
     return features
