@@ -767,6 +767,8 @@ def simulate_verify(session_id: str, selections: Dict[str, str]) -> Dict[str, An
     # Finalize the subtractive borders and compile the GeoJSON geometries
     print("[SIMULATOR] Finalizing validation borders after user selections...", flush=True)
     year = context["year"]
+    if "compounding_plan" in context:
+        year = context["compounding_plan"].get("year_2", year)
     
     # Apply realistic compounded baseline from Stage 1
     if "compounding_baselines_real" in context:

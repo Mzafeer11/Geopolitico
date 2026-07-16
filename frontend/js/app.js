@@ -217,12 +217,31 @@ function pollJobStatus(jobId) {
 
 let validationHighlightLayer = null;
 
-function showValidationHighlight(geojson) {
+function showValidationHighlight(geojson, scenarioType) {
     if (validationHighlightLayer && map) {
         map.removeLayer(validationHighlightLayer);
         validationHighlightLayer = null;
     }
     if (!geojson || !geojson.features || geojson.features.length === 0 || !map) return;
+    
+    // Auto-switch Leaflet map tab to match the anomaly's target scenario
+    if (scenarioType === "realistic") {
+        const modeBeforeBtn = document.getElementById("mode-before");
+        const modeRealisticBtn = document.getElementById("mode-realistic");
+        const modeOptimisticBtn = document.getElementById("mode-optimistic");
+        const modeRiversBtn = document.getElementById("mode-rivers");
+        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
+        if (modeRealisticBtn) modeRealisticBtn.classList.add("active");
+        setMapMode("realistic");
+    } else if (scenarioType === "optimistic") {
+        const modeBeforeBtn = document.getElementById("mode-before");
+        const modeRealisticBtn = document.getElementById("mode-realistic");
+        const modeOptimisticBtn = document.getElementById("mode-optimistic");
+        const modeRiversBtn = document.getElementById("mode-rivers");
+        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
+        if (modeOptimisticBtn) modeOptimisticBtn.classList.add("active");
+        setMapMode("optimistic");
+    }
     
     validationHighlightLayer = L.geoJSON(geojson, {
         style: (feature) => {
@@ -342,36 +361,36 @@ function displayValidationQuestions(questions) {
         opt2Group.appendChild(label2);
         
         // Hover listeners for highlights
-        opt1Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_1_geojson));
+        opt1Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_1_geojson, q.scenario_type));
         opt1Group.addEventListener("mouseleave", () => {
             const checked = card.querySelector(`input[name="opt-${q.id}"]:checked`);
             if (checked && checked.value === "option_1") {
-                showValidationHighlight(q.option_1_geojson);
+                showValidationHighlight(q.option_1_geojson, q.scenario_type);
             } else if (checked && checked.value === "option_2") {
-                showValidationHighlight(q.option_2_geojson);
+                showValidationHighlight(q.option_2_geojson, q.scenario_type);
             } else {
                 clearValidationHighlight();
             }
         });
         opt1Group.addEventListener("click", () => {
             radio1.checked = true;
-            showValidationHighlight(q.option_1_geojson);
+            showValidationHighlight(q.option_1_geojson, q.scenario_type);
         });
         
-        opt2Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_2_geojson));
+        opt2Group.addEventListener("mouseenter", () => showValidationHighlight(q.option_2_geojson, q.scenario_type));
         opt2Group.addEventListener("mouseleave", () => {
             const checked = card.querySelector(`input[name="opt-${q.id}"]:checked`);
             if (checked && checked.value === "option_2") {
-                showValidationHighlight(q.option_2_geojson);
+                showValidationHighlight(q.option_2_geojson, q.scenario_type);
             } else if (checked && checked.value === "option_1") {
-                showValidationHighlight(q.option_1_geojson);
+                showValidationHighlight(q.option_1_geojson, q.scenario_type);
             } else {
                 clearValidationHighlight();
             }
         });
         opt2Group.addEventListener("click", () => {
             radio2.checked = true;
-            showValidationHighlight(q.option_2_geojson);
+            showValidationHighlight(q.option_2_geojson, q.scenario_type);
         });
         
         card.appendChild(opt1Group);

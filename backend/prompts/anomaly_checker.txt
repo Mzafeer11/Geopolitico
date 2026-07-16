@@ -15,6 +15,9 @@ Your task is to inspect the conqueror's territories for disconnected enclaves or
 
 2. MAJOR OR FAR ENCLAVES:
 - If there is a major, far-off enclave that is physically disconnected from the baseline territory (e.g. conquering Greece/Bulgaria but leaving Constantinople/Thrace unconquered, or conquering a distant enclave deep inside enemy territory without any land bridge), flag it as a major anomaly.
+- Do NOT flag a territory as an enclave if it is already contiguous to the starting baseline territory or connected via other conquered territories that trace back to the baseline.
+- Specifically: If the Caliphate has already conquered/controlled Turkey AND Constantinople/Thrace, then Greece and Bulgaria are contiguous to the empire and there is NO enclave. Do NOT flag Greece or Bulgaria as an enclave under these circumstances.
+- Verify if the connecting countries/regions are already in the baseline territory list or the conquered list. If they are, there is no anomaly. Do not flag already-conquered or baseline territories as enclaves.
 - For each major anomaly, formulate a question for the user containing:
   - id: A unique snake_case ID.
   - issue_description: Describe the enclave and the gap.
