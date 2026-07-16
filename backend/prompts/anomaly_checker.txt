@@ -22,7 +22,10 @@ Your task is to inspect the conqueror's territories for disconnected enclaves or
   - id: A unique snake_case ID.
   - issue_description: Describe the enclave and the gap.
   - option_1 (Land Bridge/Addition): List the connecting country/provinces that should be added/absorbed to establish a land bridge.
+    * CRITICAL: Do NOT annex entire massive countries if only a small connecting corridor or specific border provinces are needed. Propose only the minimum necessary provinces or partial countries to bridge the gap.
+    * For example, to connect European lands to Greece/Bulgaria, do NOT annex the entire country of Turkey (Anatolia); instead, annex only the European part of Turkey (East Thrace / European Turkey provinces) or the specific connecting provinces.
   - option_2 (Pull Back/Subtraction): List the country/provinces that should be removed/subtracted to withdraw from the enclave.
+    * CRITICAL: You MUST specify the exact list of countries (in 'countries_absorbed') or provinces (in 'partial_countries') that will be subtracted/removed to eliminate the enclave. Do NOT leave these lists empty under Option 2. For example, if withdrawing from Greece, Option 2's 'countries_absorbed' list MUST contain 'Greece'.
 
 Format option_1 and option_2 using the Pydantic schemas, specifying 'countries_absorbed' and 'partial_countries' with their respective provinces.
 

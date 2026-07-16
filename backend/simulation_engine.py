@@ -4,7 +4,7 @@ import uuid
 import traceback
 import httpx
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Tuple
 from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
@@ -274,20 +274,49 @@ def force_conquest_provinces(territories: List[TerritoryChange], scenario_text: 
                 if f_prov not in france_p.provinces:
                     france_p.provinces.append(f_prov)
                     
-    # General post-processing to fully absorb countries on the conquered side of the Rhine
+    # General post-processing to fully absorb countries on the conquered side of natural boundaries
+    NATURAL_BOUNDARY_CONQUEST_ABSORB = {
+        "rhine": {
+            "west_of_natural_boundary": ["France", "Belgium", "Luxembourg"],
+            "east_of_natural_boundary": ["Germany", "Switzerland", "Austria", "Netherlands"]
+        },
+        "danube": {
+            "south_of_natural_boundary": ["Bulgaria", "Greece", "Turkey", "North Macedonia", "Albania", "Kosovo", "Montenegro", "Bosnia and Herzegovina"],
+            "north_of_natural_boundary": ["Romania", "Moldova", "Ukraine", "Slovakia", "Hungary", "Austria"]
+        },
+        "loire": {
+            "south_of_natural_boundary": ["Spain", "Portugal"]
+        },
+        "pyrenees": {
+            "south_of_natural_boundary": ["Spain", "Portugal"]
+        }
+    }
+    
     for t in territories:
-        has_rhine_west = False
+        countries_to_absorb = set()
         for p in t.partial_countries:
-            if p.clip_method == "natural_boundary" and p.clip_description and "rhine" in p.clip_description.lower():
-                if p.clip_direction == "west_of_natural_boundary":
-                    has_rhine_west = True
-                    break
-        if has_rhine_west:
-            countries_to_absorb = ["France", "Belgium", "Luxembourg"]
+            if p.clip_method == "natural_boundary" and p.clip_description:
+                desc_lower = p.clip_description.lower()
+                matched_boundary = None
+                for b_name in NATURAL_BOUNDARY_CONQUEST_ABSORB:
+                    if b_name in desc_lower:
+                        matched_boundary = b_name
+                        break
+                if matched_boundary:
+                    direction = p.clip_direction
+                    absorb_list = NATURAL_BOUNDARY_CONQUEST_ABSORB[matched_boundary].get(direction, [])
+                    for country_name in absorb_list:
+                        countries_to_absorb.add(country_name)
+                        
+        if countries_to_absorb:
             for c in countries_to_absorb:
-                if c not in t.countries_absorbed:
-                    t.countries_absorbed.append(c)
-            # Filter out from partials
+                # Only absorb if it was listed in partials (meaning it was included in the LLM's boundary expansion)
+                # or if it is already in countries_absorbed.
+                is_in_partials = any(p.country.lower() == c.lower() for p in t.partial_countries)
+                if is_in_partials:
+                    if c not in t.countries_absorbed:
+                        t.countries_absorbed.append(c)
+            # Filter out the absorbed countries from partial_countries, keeping other bisected/split countries
             t.partial_countries = [p for p in t.partial_countries if p.country.lower() not in [x.lower() for x in countries_to_absorb]]
 
 
@@ -339,10 +368,12 @@ def _run_geopolitical_validation(
 def _check_geopolitical_anomalies(
     result_real: ScenarioStateResult,
     result_opt: ScenarioStateResult,
+    realistic_features: List[Dict[str, Any]],
+    optimistic_features: List[Dict[str, Any]],
     scenario: str,
     year: int,
     context: Dict[str, Any]
-) -> AnomalyCheckResult:
+) -> Tuple[bool, List[Dict[str, Any]]]:
     """Run validation LLM to detect major contiguity enclaves, and pre-calculate highlight GeoJSONs."""
     try:
         baseline_pols = context.get("baseline_polities", []) if context else []
@@ -415,7 +446,28 @@ def _check_geopolitical_anomalies(
             # Option 2: Subtraction (Red)
             opt2 = q.option_2
             feat_list_2 = []
-            if opt2.countries_absorbed or opt2.partial_countries:
+            
+            # Directly extract matching features from the already compiled target scenario map layers
+            target_features = realistic_features if q.scenario_type == "realistic" else optimistic_features
+            sub_countries = [c.lower() for c in opt2.countries_absorbed]
+            sub_partials = [p.get("country", "").lower() if isinstance(p, dict) else p.country.lower() for p in opt2.partial_countries]
+            all_sub_names = set(sub_countries + sub_partials)
+            
+            if all_sub_names:
+                import copy
+                for feat in target_features:
+                    props = feat.get("properties", {})
+                    c_name = props.get("country", "")
+                    if not c_name:
+                        c_name = props.get("name", "")
+                    if c_name and c_name.lower() in all_sub_names:
+                        f_copy = copy.deepcopy(feat)
+                        f_copy["properties"]["color"] = "#ef4444"
+                        f_copy["properties"]["description"] = f"Proposed Subtraction: {opt2.description}"
+                        feat_list_2.append(f_copy)
+                        
+            # Fallback: if no features matched, compile via _process_territory_definitions
+            if not feat_list_2 and (opt2.countries_absorbed or opt2.partial_countries):
                 pc_list = []
                 for pc in opt2.partial_countries:
                     if isinstance(pc, dict):
@@ -1656,7 +1708,7 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
             pending_opt = locals()['res_opt']
             
     if pending_real and pending_opt:
-        has_anomalies, questions_list = _check_geopolitical_anomalies(pending_real, pending_opt, scenario, year, context)
+        has_anomalies, questions_list = _check_geopolitical_anomalies(pending_real, pending_opt, realistic_features, optimistic_features, scenario, year, context)
         if has_anomalies and questions_list:
             # Save state in context for simulate_verify
             context["pending_real_result"] = pending_real.model_dump()
@@ -2396,12 +2448,6 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                 final_sh = item["final_geom"]
                 if final_sh and not final_sh.is_empty:
                     compounding_resolved[t.name] = final_sh
-                    if actual_name in compounding_resolved:
-                        try:
-                            compounding_resolved[actual_name] = compounding_resolved[actual_name].union(final_sh)
-                        except Exception:
-                            compounding_resolved[actual_name] = final_sh
-                    else:
-                        compounding_resolved[actual_name] = final_sh
+                    compounding_resolved[actual_name] = final_sh
         
     return features
