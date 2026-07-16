@@ -2001,6 +2001,11 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
         
         # Load all provinces of fully absorbed countries as additions
         for country_name in getattr(t, "countries_absorbed", []):
+            # In partition/treaty mode, do not treat your own baseline country as an addition.
+            # This prevents baseline-additions circular mutual subtraction gaps.
+            if mode == "proposal_partition" and (country_name.lower() in t.name.lower() or t.name.lower() in country_name.lower()):
+                print(f"[DEBUG]   Skipping fully absorbed country: '{country_name}' under polity '{t.name}' (matches baseline name in partition mode)", flush=True)
+                continue
             print(f"[DEBUG]   Loading fully absorbed country: '{country_name}'...", flush=True)
             for feat_data in loader.provinces_data:
                 props = feat_data.get("properties", {})
@@ -2305,7 +2310,13 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                             target_polity = other_polity[0]
                             
                     if not target_polity:
-                        original_owner = feats[0]["properties"].get("admin")
+                        original_owner = None
+                        if "(" in prov and ")" in prov:
+                            parts = prov.split("(")
+                            if len(parts) > 1:
+                                original_owner = parts[1].replace(")", "").strip()
+                        if not original_owner:
+                            original_owner = feats[0]["properties"].get("admin")
                         if original_owner:
                             for t in territories:
                                 if original_owner.lower() in t.name.lower() or t.name.lower() in original_owner.lower():
@@ -2467,6 +2478,29 @@ def _process_territory_definitions(territories: List[TerritoryChange], year: int
                             final_sh = final_sh.difference(other_add)
                         except Exception as e:
                             print(f"[SIMULATOR] Error subtracting geometry: {e}")
+                # Sliver filter for partition mode: remove tiny fragments near other polities
+                if final_sh and getattr(final_sh, 'geom_type', None) == 'MultiPolygon':
+                    from shapely.geometry import MultiPolygon
+                    valid_polys = []
+                    for p in final_sh.geoms:
+                        # Remove slivers smaller than 0.1 sq degrees that are close to the other polity's baseline or additions
+                        if p.area < 0.1:
+                            near_other = False
+                            for j, other_item in enumerate(resolved_territories):
+                                if i == j:
+                                    continue
+                                other_base = other_item["base_geom"]
+                                other_add = other_item["additions_geom"]
+                                if other_base and p.distance(other_base) < 0.1:
+                                    near_other = True
+                                    break
+                                if other_add and p.distance(other_add) < 0.1:
+                                    near_other = True
+                                    break
+                            if near_other:
+                                continue
+                        valid_polys.append(p)
+                    final_sh = MultiPolygon(valid_polys) if valid_polys else None
             item["final_geom"] = final_sh
         
     # Step 3: Format back into GeoJSON Features
