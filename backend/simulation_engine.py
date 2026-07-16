@@ -273,6 +273,22 @@ def force_conquest_provinces(territories: List[TerritoryChange], scenario_text: 
             for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
                 if f_prov not in france_p.provinces:
                     france_p.provinces.append(f_prov)
+                    
+    # General post-processing to fully absorb countries on the conquered side of the Rhine
+    for t in territories:
+        has_rhine_west = False
+        for p in t.partial_countries:
+            if p.clip_method == "natural_boundary" and p.clip_description and "rhine" in p.clip_description.lower():
+                if p.clip_direction == "west_of_natural_boundary":
+                    has_rhine_west = True
+                    break
+        if has_rhine_west:
+            countries_to_absorb = ["France", "Belgium", "Luxembourg"]
+            for c in countries_to_absorb:
+                if c not in t.countries_absorbed:
+                    t.countries_absorbed.append(c)
+            # Filter out from partials
+            t.partial_countries = [p for p in t.partial_countries if p.country.lower() not in [x.lower() for x in countries_to_absorb]]
 
 
 def _run_geopolitical_validation(

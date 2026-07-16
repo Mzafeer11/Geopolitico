@@ -27,7 +27,8 @@ Your task is to review and correct this output to ensure strict geopolitical rea
   - Or remove the disconnected area (e.g. Greece/Bulgaria) from the conquered territories list if a land connection cannot be realistically established.
 
 4. BOUNDARY CLIPPING SENSITIVITY:
-- If a vector boundary clip is used (e.g., Loire River or Rhine River), ensure the country being clipped is list ONLY in 'partial_countries' and NOT in 'countries_absorbed'.
+- If a vector boundary clip is used (e.g., Loire River or Danube River), ensure the country being clipped is listed ONLY in 'partial_countries' and NOT in 'countries_absorbed'.
+- If the boundary is the Rhine River with direction 'west_of_natural_boundary', countries that lie entirely on the conquered side (such as France, Belgium, and Luxembourg) MUST be fully absorbed: add them to 'countries_absorbed' and remove them from 'partial_countries'. Only countries actually split by the river (Germany, Netherlands, Switzerland) should remain in 'partial_countries'.
 - Ensure the 'clip_direction' matches the geographic position of the conquered territory relative to the boundary (e.g. south of Loire for Umayyad expansion from Spain, west of Rhine for expansion into Germany).
 
 Respond with the audited and corrected list of territories under the 'territories' field. Do not include any other fields in your response.
