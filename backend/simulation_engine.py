@@ -171,13 +171,15 @@ def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
         clean_model = model.replace("openai/", "", 1) if model.startswith("openai/") else model
         token = os.environ.get("GITHUB_TOKEN", GITHUB_TOKEN)
         print(f"[SIMULATOR] Invoking model '{clean_model}' for structured output...")
+        # Set higher token limit for GPT-5 models to accommodate large reasoning token usages
+        model_max_tokens = 16384 if "gpt-5" in clean_model.lower() else 4096
         try:
             llm = ChatOpenAI(
                 model=clean_model,
                 api_key=token,
                 base_url=GITHUB_API_URL,
                 temperature=temperature,
-                max_tokens=4096,
+                max_tokens=model_max_tokens,
                 timeout=120.0
             )
             # Disable native function calling for non-OpenAI models to avoid API errors
