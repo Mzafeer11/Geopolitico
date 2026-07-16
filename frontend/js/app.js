@@ -190,6 +190,7 @@ function pollJobStatus(jobId) {
             if (job.status === "completed") {
                 clearInterval(pollInterval);
                 currentSessionId = job.session_id; // Store globally
+                clearValidationHighlight();
                 displayResults(job.result);
             } else if (job.status === "awaiting_verification") {
                 clearInterval(pollInterval);
@@ -199,6 +200,7 @@ function pollJobStatus(jobId) {
                 displayValidationQuestions(job.questions);
             } else if (job.status === "failed") {
                 clearInterval(pollInterval);
+                clearValidationHighlight();
                 showToast(`Simulation failed: ${job.error}`, "error");
                 showPanel("input-section");
             }
@@ -206,6 +208,7 @@ function pollJobStatus(jobId) {
         .catch(err => {
             console.error(err);
             clearInterval(pollInterval);
+            clearValidationHighlight();
             showToast("Error polling job status.", "error");
             showPanel("input-section");
         });

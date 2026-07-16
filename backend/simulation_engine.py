@@ -154,10 +154,13 @@ def _invoke_structured_with_fallback(schema, messages, temperature=0.5):
         EXHAUSTED_MODELS.clear()
         available_models = [m for m in GITHUB_MODELS if m not in _BLACKLISTED_MODELS]
         
-    # Prioritize GPT-4o models first in the attempt list
+    # Prioritize GPT-5 models first, then GPT-4o/4.1 models
     attempt_list = []
     for m in available_models:
-        if "gpt-4o" in m.lower():
+        if "gpt-5" in m.lower():
+            attempt_list.append(m)
+    for m in available_models:
+        if ("gpt-4o" in m.lower() or "gpt-4.1" in m.lower()) and m not in attempt_list:
             attempt_list.append(m)
     for m in available_models:
         if m not in attempt_list:
@@ -717,8 +720,18 @@ def simulate_verify(session_id: str, selections: Dict[str, str]) -> Dict[str, An
     print("[SIMULATOR] Finalizing validation borders after user selections...", flush=True)
     year = context["year"]
     
+    # Apply realistic compounded baseline from Stage 1
+    if "compounding_baselines_real" in context:
+        context["stage2_baselines"] = context["compounding_baselines_real"]
     realistic_features = _process_territory_definitions(res_real.territories, year, context)
+    
+    # Apply optimistic compounded baseline from Stage 1
+    if "compounding_baselines_opt" in context:
+        context["stage2_baselines"] = context["compounding_baselines_opt"]
     optimistic_features = _process_territory_definitions(res_opt.territories, year, context)
+    
+    # Clear baseline override to keep session context clean
+    context.pop("stage2_baselines", None)
     
     # Retrieve the pre-compiled results from when the simulation paused for validation
     results = context.get("results")
@@ -1013,7 +1026,8 @@ def _run_conquest_sim(
     
     # Run the Geopolitical Validation AI Node to enforce contiguity and exclusivity
     # Skip running validation during Stage 1 of compounding conquest (run it only at Stage 2 for final outcomes)
-    if context_val.get("simulation_mode") != "compounding_conquest" or stage_num == 2:
+    is_compounding = ("compounding_plan" in context_val or "scenario_2" in context_val)
+    if not is_compounding or stage_num == 2:
         res_real = _run_geopolitical_validation(res_real, scenario_val, year_val, context_val)
         res_opt = _run_geopolitical_validation(res_opt, scenario_val, year_val, context_val)
     
@@ -1466,6 +1480,10 @@ def _run_final_simulation(context: Dict[str, Any], answers: Optional[Dict[str, s
         context_2["simulation_mode"] = "expansion_conquest"
         context_2["stage1_real_conquests_str"] = real_conquests_str_1
         context_2["stage1_opt_conquests_str"] = opt_conquests_str_1
+        
+        # Save baselines overrides in main context for simulate_verify finalization
+        context["compounding_baselines_real"] = resolved_real_1
+        context["compounding_baselines_opt"] = resolved_opt_1
         
         # Execute Stage 2 with baselines overrides from Stage 1
         res_real_2, res_opt_2, realistic_features_2, optimistic_features_2 = _run_conquest_sim(
