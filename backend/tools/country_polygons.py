@@ -37,6 +37,66 @@ OVERSEAS_EXCLUSIONS = {
     ],
 }
 
+BOUNDARY_COUNTRIES_MAP = {
+    "loire": ["France"],
+    "pyrenees": ["France", "Spain", "Andorra"],
+    "pyrénées": ["France", "Spain", "Andorra"],
+    "alps": ["France", "Italy", "Switzerland", "Germany", "Austria", "Slovenia", "Liechtenstein"],
+    "rhine": ["Germany", "France", "Switzerland", "Netherlands", "Belgium", "Luxembourg", "Austria", "Liechtenstein"],
+    "danube": ["Germany", "Austria", "Slovakia", "Hungary", "Croatia", "Serbia", "Romania", "Bulgaria", "Moldova", "Ukraine"],
+    "bosphorus": ["Turkey"],
+    "chenab": ["India", "Pakistan"],
+    "rhone": ["France", "Switzerland"],
+    "rhône": ["France", "Switzerland"]
+}
+
+
+def get_country_polygon_loader() -> "CountryPolygonLoader":
+    """Get singleton CountryPolygonLoader via SimulationCache."""
+    from backend.tools.spatial_cache import SimulationCache
+    return SimulationCache.get_instance().get_country_polygon_loader()
+
+
+def get_countries_for_natural_boundary(boundary_name: str, loader: Optional["CountryPolygonLoader"] = None) -> List[str]:
+    """
+    Dynamically find all modern sovereign countries intersected by a natural boundary
+    (river, mountain range, etc.) via 0.3° spatial buffer intersection.
+    """
+    try:
+        if loader is None:
+            loader = get_country_polygon_loader()
+        from backend.tools.gis_tools import natural_boundary_tool
+        res_osm = natural_boundary_tool(boundary_name)
+        if res_osm.get("status") == "success" and res_osm.get("paths"):
+            from shapely.geometry import LineString, shape
+            from shapely.ops import unary_union
+            lines = [LineString(p) for p in res_osm["paths"] if len(p) >= 2]
+            if lines:
+                main_line = max(lines, key=lambda l: l.length)
+                main_centroid = main_line.centroid
+                clustered_lines = [l for l in lines if l.centroid.distance(main_centroid) <= 15.0]
+                
+                boundary_line = clustered_lines[0] if len(clustered_lines) == 1 else unary_union(clustered_lines)
+                buffered_boundary = boundary_line.buffer(0.3)
+                
+                intersected = set()
+                for feat in loader.provinces_data:
+                    admin_name = feat.get("properties", {}).get("admin")
+                    if admin_name:
+                        p_geom = shape(feat["geometry"])
+                        if buffered_boundary.intersects(p_geom):
+                            intersected.add(admin_name)
+                if intersected:
+                    return sorted(list(intersected))
+    except Exception as e:
+        print(f"[DEBUG] Dynamic spatial boundary lookup failed for '{boundary_name}': {e}", flush=True)
+
+    b_lower = boundary_name.lower()
+    for kw, b_countries in BOUNDARY_COUNTRIES_MAP.items():
+        if kw in b_lower:
+            return b_countries
+    return []
+
 
 class CountryPolygonLoader:
     def __init__(self):
@@ -55,12 +115,10 @@ class CountryPolygonLoader:
                 geojson = json.load(f)
             for feature in geojson.get("features", []):
                 properties = feature.get("properties", {})
-                name = (properties.get("name") or "").lower()
-                iso_a3 = (properties.get("iso_a3") or "").lower()
-                if name:
-                    self.countries_data[name] = feature
-                if iso_a3:
-                    self.countries_data[iso_a3] = feature
+                for key_name in ["name", "admin", "sovereignt", "geounit", "name_long", "formal_en", "iso_a3", "adm0_a3"]:
+                    val = (properties.get(key_name) or "").strip().lower()
+                    if val:
+                        self.countries_data[val] = feature
         except Exception as e:
             print(f"[ERR] Failed to load countries GeoJSON: {e}")
 

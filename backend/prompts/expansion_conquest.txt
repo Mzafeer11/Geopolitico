@@ -3,6 +3,7 @@ Scenario: {scenario} (Military counterfactual in {year})
 Parties: {parties}
 {ownership_str}
 Contested provinces: {contested_provinces}
+Available historical administrative units (ONLY use exact names from this list in historical_provinces): {available_historical_units}
 {answers_str}
 
 GOAL:
@@ -23,3 +24,4 @@ IMPORTANT GEOGRAPHY RULES:
    - Set 'clip_description' to the name of the boundary (e.g., 'Loire River', 'Pyrenees', 'Alps', 'Danube River', 'Rhine River').
    - Set 'clip_direction' to define which side to annex (e.g., 'south_of_natural_boundary', 'north_of_natural_boundary', 'west_of_longitude', 'east_of_longitude').
    - If you use 'natural_boundary', you can leave the 'provinces' array completely empty '[]'! The engine will automatically query and clip all provinces for that country along the boundary, creating a smooth, historically realistic line!
+9. PRECOMPUTED HISTORICAL PROVINCES RULE: Always prefer specifying your conquered territory using `historical_provinces` (choose relevant regional historical units for the active conflict fronts). STRICT RULE: When you specify `historical_provinces`, set `partial_countries` to an empty array `[]`! Do NOT populate `partial_countries` or `clip_method` when `historical_provinces` are specified!

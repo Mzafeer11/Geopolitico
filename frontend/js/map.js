@@ -2,7 +2,9 @@ let map;
 let beforeLayer = null;
 let realisticLayer = null;
 let optimisticLayer = null;
-let currentMode = "optimistic"; // "before", "realistic", or "optimistic"
+let districtsLayer = null;
+let auditLayer = null;
+let currentMode = "optimistic"; // "before", "realistic", "optimistic", "districts", or "audit"
 let boundaryOverlayLayer = null;
 let markerOverlayLayer = null;
 
@@ -28,41 +30,70 @@ function initMap() {
 
 function renderScenarioMaps(
     geojsonBefore, geojsonRealistic, geojsonOptimistic,
-    territoriesBefore, territoriesRealistic, territoriesOptimistic
+    territoriesBefore, territoriesRealistic, territoriesOptimistic,
+    geojsonDistricts, geojsonAudit
 ) {
     // Clear old layers
     if (beforeLayer) map.removeLayer(beforeLayer);
     if (realisticLayer) map.removeLayer(realisticLayer);
     if (optimisticLayer) map.removeLayer(optimisticLayer);
+    if (districtsLayer) map.removeLayer(districtsLayer);
+    if (auditLayer) map.removeLayer(auditLayer);
 
     const styleFeature = (feature) => {
-        const status = (feature.properties.status || 'direct_control').toLowerCase();
+        const props = feature.properties || {};
+        
+        if (props.is_outer_border) {
+            return {
+                color: props.stroke_color || props.color || '#38bdf8',
+                weight: props.stroke_weight || 3,
+                opacity: 0.9,
+                fillColor: props.fill_color || props.color || '#0284c7',
+                fillOpacity: props.fill_opacity || 0.15,
+                className: 'outer-border-polygon'
+            };
+        }
+
+        if (props.is_sub_province) {
+            return {
+                color: props.stroke_color || '#0f172a',
+                weight: props.stroke_weight || 1.8,
+                opacity: 0.95,
+                fillColor: props.fill_color || props.color || '#38bdf8',
+                fillOpacity: props.fill_opacity || 0.50,
+                className: 'sub-province-polygon'
+            };
+        }
+
+        const status = (props.status || 'direct_control').toLowerCase();
         const isVassal = status === 'vassal';
         const isTributary = status === 'tributary';
         const isDependency = isVassal || isTributary;
         
-        const finalColor = getTerritoryColor(feature.properties.name, feature.properties.color || '#d4a853');
+        const finalColor = props.fill_color || props.color || getTerritoryColor(props.name, '#d4a853');
 
         return {
             fillColor: finalColor,
-            weight: isDependency ? 1 : 1.5,
-            opacity: 0.8,
+            weight: isDependency ? 1 : 1.8,
+            opacity: 0.9,
             color: isDependency ? 'rgba(255, 255, 255, 0.6)' : 'rgba(255, 255, 255, 0.4)',
-            fillOpacity: isTributary ? 0.2 : (isVassal ? 0.3 : 0.55),
+            fillOpacity: isTributary ? 0.25 : (isVassal ? 0.35 : 0.55),
             dashArray: isTributary ? '2, 6' : (isVassal ? '4, 4' : null),
             className: 'interactive-polygon'
         };
     };
 
     const onEachFeature = (feature, layer) => {
+        const props = feature.properties || {};
+        
         // Highlight on hover
         layer.on({
             mouseover: (e) => {
                 const l = e.target;
                 l.setStyle({
-                    fillOpacity: 0.8,
+                    fillOpacity: 0.80,
                     weight: 2.5,
-                    color: 'rgba(255, 255, 255, 0.8)'
+                    color: '#ffffff'
                 });
                 l.bringToFront();
             },
@@ -71,18 +102,29 @@ function renderScenarioMaps(
             }
         });
 
-        // Detailed popup info
-        const props = feature.properties;
-        const capitalStr = props.capital ? `<p><strong>Capital:</strong> ${props.capital}</p>` : '';
-        const popStr = props.population ? `<p><strong>Population Est:</strong> ${props.population}</p>` : '';
+        // Rich render-style popup info
+        const titleStr = props.fullname || props.name || 'Territory';
+        const empireStr = props.empire ? `<p style="margin:2px 0;"><strong>Empire:</strong> <span style="color:${props.color || '#38bdf8'}; font-weight:bold;">${props.empire}</span></p>` : '';
+        const unitStr = props.assigned_unit ? `<p style="margin:2px 0;"><strong>Historical Unit:</strong> <span style="color:${props.color || '#38bdf8'}; font-weight:bold;">${props.assigned_unit}</span></p>` : '';
+        const statusBadge = props.status ? `<span style="background:${props.status === 'Fully Inside' ? '#059669' : '#d97706'}; color:white; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:600;">${props.status}</span>` : '';
+        const snappedTag = props.snapped_boundary ? `<span style="background:#8b5cf6; color:white; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:600; margin-left:4px;">Snapped: ${props.snapped_boundary}</span>` : '';
+        const distStr = (props.distance_km !== undefined && props.distance_km !== null) ? `<p style="margin:2px 0;"><strong>Distance:</strong> ${props.distance_km} km</p>` : '';
+        const capitalStr = props.capital ? `<p style="margin:2px 0;"><strong>Capital:</strong> ${props.capital}</p>` : '';
+        const popStr = props.population ? `<p style="margin:2px 0;"><strong>Population Est:</strong> ${props.population}</p>` : '';
         
         const popupContent = `
-            <div class="map-popup">
-                <h3>${props.name}</h3>
-                ${capitalStr}
-                ${popStr}
-                <hr style="margin: 8px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.15);" />
-                <p class="popup-desc">${props.description || 'No description available.'}</p>
+            <div class="map-popup" style="font-family: Inter, sans-serif; font-size: 12px; color: #f8fafc; padding: 4px;">
+                <h3 style="margin:0 0 6px 0; font-size: 15px; color: ${props.color || '#38bdf8'};">${titleStr}</h3>
+                ${statusBadge} ${snappedTag}
+                <div style="margin-top: 6px;">
+                    ${empireStr}
+                    ${unitStr}
+                    ${distStr}
+                    ${capitalStr}
+                    ${popStr}
+                </div>
+                <hr style="margin: 6px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.15);" />
+                <p class="popup-desc" style="margin:0; font-size:11px; color:#cbd5e1;">${props.description || 'Historical baseline feature.'}</p>
             </div>
         `;
         layer.bindPopup(popupContent, {
@@ -106,6 +148,20 @@ function renderScenarioMaps(
         onEachFeature: onEachFeature
     });
 
+    if (geojsonDistricts) {
+        districtsLayer = L.geoJSON(geojsonDistricts, {
+            style: styleFeature,
+            onEachFeature: onEachFeature
+        });
+    }
+
+    if (geojsonAudit) {
+        auditLayer = L.geoJSON(geojsonAudit, {
+            style: styleFeature,
+            onEachFeature: onEachFeature
+        });
+    }
+
     // Update active map layers and legend
     updateMapLayers();
     syncActiveLegendAndSummary();
@@ -120,6 +176,8 @@ function renderScenarioMaps(
 function getActiveLayer() {
     if (currentMode === "before") return beforeLayer;
     if (currentMode === "realistic") return realisticLayer;
+    if (currentMode === "districts") return districtsLayer || realisticLayer;
+    if (currentMode === "audit") return auditLayer || realisticLayer;
     if (currentMode === "rivers") return realisticLayer;
     return optimisticLayer;
 }
@@ -130,6 +188,8 @@ function updateMapLayers() {
     if (beforeLayer) map.removeLayer(beforeLayer);
     if (realisticLayer) map.removeLayer(realisticLayer);
     if (optimisticLayer) map.removeLayer(optimisticLayer);
+    if (districtsLayer) map.removeLayer(districtsLayer);
+    if (auditLayer) map.removeLayer(auditLayer);
     if (boundaryOverlayLayer) {
         map.removeLayer(boundaryOverlayLayer);
         boundaryOverlayLayer = null;
@@ -218,6 +278,24 @@ function syncActiveLegendAndSummary() {
     } else {
         territories = data.territories_after_optimistic;
         summaryText = data.optimistic_scenario_summary || "Optimistic alternate boundary (maximum extent).";
+    }
+
+    // Fallback: If territories array is empty/undefined, extract unique territory items from active layer features
+    if (!territories || territories.length === 0) {
+        const activeLayer = getActiveLayer();
+        if (activeLayer && activeLayer.getLayers) {
+            const seenNames = new Set();
+            territories = [];
+            activeLayer.getLayers().forEach(layer => {
+                const props = (layer.feature && layer.feature.properties) || {};
+                const name = props.name || props.empire || props.fullname;
+                const color = props.color || props.fill_color || getTerritoryColor(name, "#38bdf8");
+                if (name && !seenNames.has(name)) {
+                    seenNames.add(name);
+                    territories.push({ name: name, color: color });
+                }
+            });
+        }
     }
 
     updateLegend(territories);

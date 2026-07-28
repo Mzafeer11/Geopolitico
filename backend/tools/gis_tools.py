@@ -1,11 +1,12 @@
 import os
+import json
 import httpx
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from shapely.geometry import LineString, MultiLineString
-from backend.config import GITHUB_TOKEN, GITHUB_API_URL, GITHUB_MODELS, EXHAUSTED_MODELS
+from backend.config import GITHUB_TOKEN, GITHUB_API_URL, GITHUB_MODELS, EXHAUSTED_MODELS, DATA_DIR
 
 # Helper to avoid rate limiting
 import time
@@ -138,15 +139,22 @@ def natural_boundary_tool(name: str) -> Dict[str, Any]:
         from backend.config import DATA_DIR
         import json
         
-        files_to_search = [
-            ("ne_50m_rivers_lake_centerlines.geojson", ["name", "name_alt", "name_en"]),
-            ("ne_10m_rivers_lake_centerlines.geojson", ["name", "name_alt", "name_en"]),
-            ("ne_50m_lakes.geojson", ["name", "name_alt", "name_en"]),
-            ("ne_50m_geography_regions_polys.geojson", ["NAME", "NAMEALT"]),
-            ("ne_10m_geography_regions_polys.geojson", ["NAME", "NAMEALT"]),
-            ("ne_50m_geography_marine_polys.geojson", ["name", "namealt"]),
-            ("ne_10m_geography_marine_polys.geojson", ["name", "namealt"])
-        ]
+        files_to_search = []
+        for entry in sorted(DATA_DIR.iterdir()):
+            if not entry.is_file():
+                continue
+            filename = entry.name.lower()
+            if not filename.endswith(".geojson"):
+                continue
+            if not any(token in filename for token in ["river", "lake", "geography"]):
+                continue
+
+            if "regions" in filename or "marine" in filename:
+                name_keys = ["NAME", "NAMEALT", "name", "namealt"]
+            else:
+                name_keys = ["name", "name_alt", "name_en", "name_de", "name_fr", "name_el", "name_tr"]
+
+            files_to_search.append((entry.name, name_keys))
         
         lines = []
         for filename, name_keys in files_to_search:
@@ -411,3 +419,122 @@ Return a verified structured output."""
         }
     except Exception as e:
         return {"status": "error", "message": f"Demographics validation LLM invocation failed: {e}"}
+
+
+def find_contested_provinces(polities: List[str], year: int, target_countries: Optional[List[str]] = None, is_partition: bool = False) -> List[str]:
+    """
+    Find all modern provinces that overlap or border the baseline geometries 
+    of the primary conflict polities in the Cliopatria database.
+    """
+    from backend.tools.spatial_cache import SimulationCache
+    from backend.tools.country_polygons import get_country_polygon_loader
+    from backend.tools.baseline_resolver import _get_resolved_baseline_geometry
+    from shapely.geometry import shape, box
+    
+    cache_inst = SimulationCache.get_instance()
+    tc_list = target_countries or []
+    cached = cache_inst.get_contested_provinces(polities, year, tc_list, is_partition)
+    if cached is not None:
+        return cached
+
+    loader = get_country_polygon_loader()
+    contested = set()
+    
+    disputed_geoms = []
+    if is_partition:
+        disputed_path = os.path.join(DATA_DIR, "ne_10m_admin_0_disputed_areas.geojson")
+        if os.path.exists(disputed_path):
+            try:
+                with open(disputed_path, "r", encoding="utf-8") as f:
+                    d_data = json.load(f)
+                    for feat in d_data.get("features", []):
+                        g = feat.get("geometry")
+                        if g:
+                            disputed_geoms.append(shape(g))
+            except Exception as e:
+                print(f"[SIMULATOR] Error loading disputed areas: {e}")
+    
+    party_shapes = []
+    for polity in polities:
+        sh, _, tier = _get_resolved_baseline_geometry(polity, year)
+        if sh is not None:
+            print(f"[RESOLVER] Baseline shape for '{polity}' ({year} AD) resolved via {tier}. Bounds: {sh.bounds}", flush=True)
+            party_shapes.append(sh)
+                
+    if not party_shapes:
+        return []
+        
+    for f in loader.provinces_data:
+        props = f.get("properties", {})
+        admin = props.get("admin")
+        
+        if target_countries and admin:
+            matched = False
+            for country in target_countries:
+                if country.lower() in admin.lower() or admin.lower() in country.lower():
+                    matched = True
+                    break
+            if not matched:
+                continue
+                
+        geom_dict = f.get("geometry")
+        if not geom_dict:
+            continue
+        try:
+            prov_shape = shape(geom_dict)
+            prov_bounds = prov_shape.bounds
+            
+            bbox = box(*prov_bounds)
+            intersect_count = 0
+            is_contested = False
+            for p_sh in party_shapes:
+                if p_sh.bounds[0]-1.0 <= prov_bounds[2] and prov_bounds[0] <= p_sh.bounds[2]+1.0 and \
+                   p_sh.bounds[1]-1.0 <= prov_bounds[3] and prov_bounds[1] <= p_sh.bounds[3]+1.0:
+                    
+                    try:
+                        if prov_shape.intersects(p_sh) or prov_shape.distance(p_sh) < 0.1:
+                            intersect_count += 1
+                            if not is_partition or len(party_shapes) < 2:
+                                is_contested = True
+                    except Exception:
+                        pass
+            
+            if is_partition and len(party_shapes) >= 2:
+                if intersect_count >= 2:
+                    is_contested = True
+            
+            if is_contested and is_partition and disputed_geoms:
+                intersects_disputed = False
+                for d_sh in disputed_geoms:
+                    try:
+                        if prov_shape.intersects(d_sh):
+                            intersects_disputed = True
+                            break
+                    except Exception:
+                        pass
+                if not intersects_disputed:
+                    is_contested = False
+                    
+            if is_contested:
+                pname = props.get("name")
+                if pname and admin:
+                    contested.add(f"{pname} ({admin})")
+        except Exception:
+            pass
+            
+    result_list = sorted(list(contested))
+    cache_inst.set_contested_provinces(polities, year, tc_list, is_partition, result_list)
+    return result_list
+
+
+def get_natural_boundary_geometry(name: str, region: str = "") -> Tuple[Optional[Any], Optional[List[Any]]]:
+    """
+    Get Shapely geometry and coordinate paths for a natural boundary by name.
+    """
+    res = natural_boundary_tool(name)
+    if res.get("status") == "success" and res.get("paths"):
+        lines = [LineString(p) for p in res["paths"] if len(p) >= 2]
+        if lines:
+            geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
+            return geom, res["paths"]
+    return None, None

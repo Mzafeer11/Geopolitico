@@ -17,8 +17,12 @@ function bindEvents() {
     const modeBeforeBtn = document.getElementById("mode-before");
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
+    const modeDistrictsBtn = document.getElementById("mode-districts");
+    const modeAuditBtn = document.getElementById("mode-audit");
     const modeRiversBtn = document.getElementById("mode-rivers");
     const submitValidationBtn = document.getElementById("submit-validation-btn");
+
+    const allModeBtns = [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].filter(Boolean);
 
     if (submitValidationBtn) {
         submitValidationBtn.addEventListener("click", () => {
@@ -97,28 +101,46 @@ function bindEvents() {
 
     // Map toggles
     modeBeforeBtn.addEventListener("click", () => {
-        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => btn.classList.remove("active"));
+        allModeBtns.forEach(btn => btn.classList.remove("active"));
         modeBeforeBtn.classList.add("active");
         setMapMode("before");
     });
 
     modeRealisticBtn.addEventListener("click", () => {
-        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => btn.classList.remove("active"));
+        allModeBtns.forEach(btn => btn.classList.remove("active"));
         modeRealisticBtn.classList.add("active");
         setMapMode("realistic");
     });
 
     modeOptimisticBtn.addEventListener("click", () => {
-        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => btn.classList.remove("active"));
+        allModeBtns.forEach(btn => btn.classList.remove("active"));
         modeOptimisticBtn.classList.add("active");
         setMapMode("optimistic");
     });
 
-    modeRiversBtn.addEventListener("click", () => {
-        [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => btn.classList.remove("active"));
-        modeRiversBtn.classList.add("active");
-        setMapMode("rivers");
-    });
+    if (modeDistrictsBtn) {
+        modeDistrictsBtn.addEventListener("click", () => {
+            allModeBtns.forEach(btn => btn.classList.remove("active"));
+            modeDistrictsBtn.classList.add("active");
+            setMapMode("districts");
+        });
+    }
+
+    if (modeAuditBtn) {
+        modeAuditBtn.addEventListener("click", () => {
+            allModeBtns.forEach(btn => btn.classList.remove("active"));
+            modeAuditBtn.classList.add("active");
+            setMapMode("audit");
+        });
+    }
+
+    if (modeRiversBtn) {
+        modeRiversBtn.addEventListener("click", () => {
+            allModeBtns.forEach(btn => btn.classList.remove("active"));
+            modeRiversBtn.classList.add("active");
+            setMapMode("rivers");
+        });
+    }
 }
 
 // Strip whitespaces helper
@@ -491,6 +513,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 function displayResults(result) {
+    if (result && result.result && typeof result.result === "object" && (!result.title || result.result.title)) {
+        result = result.result;
+    }
     // Cache result globally for map mode switches
     window.activeScenarioData = result;
     
@@ -546,28 +571,52 @@ function displayResults(result) {
     const modeBeforeBtn = document.getElementById("mode-before");
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
+    const modeDistrictsBtn = document.getElementById("mode-districts");
+    const modeAuditBtn = document.getElementById("mode-audit");
     const modeRiversBtn = document.getElementById("mode-rivers");
-    [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeRiversBtn].forEach(btn => btn.classList.remove("active"));
     
+    [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
+    
+    // Toggle displaying District Spectrum and Census Audit buttons
+    if (modeDistrictsBtn) {
+        if (result.geojson_districts && result.geojson_districts.features && result.geojson_districts.features.length > 0) {
+            modeDistrictsBtn.style.display = "inline-block";
+        } else {
+            modeDistrictsBtn.style.display = "none";
+        }
+    }
+
+    if (modeAuditBtn) {
+        if (result.geojson_audit && result.geojson_audit.features && result.geojson_audit.features.length > 0) {
+            modeAuditBtn.style.display = "inline-block";
+        } else {
+            modeAuditBtn.style.display = "none";
+        }
+    }
+
     // Toggle displaying Natural Borders button based on presence of boundary geometries
     const hasBoundaries = (result.osm_boundary_geometry && result.osm_boundary_geometry.length > 0);
-    if (hasBoundaries) {
+    if (hasBoundaries && modeRiversBtn) {
         modeRiversBtn.style.display = "inline-block";
-    } else {
+    } else if (modeRiversBtn) {
         modeRiversBtn.style.display = "none";
     }
     
     // Check if partition treaty mode
     const isPartition = (result.realistic_scenario_summary && result.realistic_scenario_summary.includes("partition agreement"));
     if (isPartition) {
-        modeRealisticBtn.style.display = "none";
-        modeOptimisticBtn.innerText = "After Treaty";
-        modeOptimisticBtn.classList.add("active");
+        if (modeRealisticBtn) modeRealisticBtn.style.display = "none";
+        if (modeOptimisticBtn) {
+            modeOptimisticBtn.innerText = "After Treaty";
+            modeOptimisticBtn.classList.add("active");
+        }
         currentMode = "optimistic";
     } else {
-        modeRealisticBtn.style.display = "inline-block";
-        modeOptimisticBtn.innerText = "Optimistic";
-        modeOptimisticBtn.classList.add("active");
+        if (modeRealisticBtn) modeRealisticBtn.style.display = "inline-block";
+        if (modeOptimisticBtn) {
+            modeOptimisticBtn.innerText = "Optimistic";
+            modeOptimisticBtn.classList.add("active");
+        }
         currentMode = "optimistic";
     }
     
@@ -578,6 +627,19 @@ function displayResults(result) {
         result.geojson_after_optimistic,
         result.territories_before,
         result.territories_after_realistic,
-        result.territories_after_optimistic
+        result.territories_after_optimistic,
+        result.geojson_districts,
+        result.geojson_audit
     );
+    
+    setMapMode(currentMode);
+    setTimeout(() => {
+        if (map) {
+            map.invalidateSize();
+            const activeLayer = getActiveLayer();
+            if (activeLayer && activeLayer.getBounds().isValid()) {
+                map.fitBounds(activeLayer.getBounds(), { padding: [50, 50] });
+            }
+        }
+    }, 150);
 }

@@ -1,0 +1,168 @@
+Viewed Simulation1.log:385-397
+
+Let me trace through the code to cross-reference every line of this log. I need to see `_run_conquest_sim` and `_run_final_simulation` to map the redundancies.
+
+Viewed simulation_engine.py:1460-1560
+Viewed simulation_engine.py:1340-1460
+Viewed simulation_engine.py:1230-1340
+
+Now let me see the beginning of `_run_conquest_sim` to see the duplicate contested provinces computation:
+
+Viewed simulation_engine.py:1120-1230
+
+Now let me check `_process_territory_definitions` to see the province loading there:
+
+Searched for "def _process_territory_definitions"
+Searched for "def _process_territory"
+Ran command: `powershell -Command "Select-String -Path 'backend/simulation_engine.py' -Pattern '_process_territory' | Select-Object -First 10"`
+Viewed simulation_engine.py:2372-2430
+
+Now let me check the `CountryPolygonLoader` to see if it caches or reloads each time:
+
+Searched for "class CountryPolygonLoader"
+Searched for "CountryPolygonLoader"
+Viewed country_polygons.py:41-80
+
+Now let me also check `find_contested_provinces`:
+
+Searched for "def find_contested_provinces"
+Ran command: `powershell -Command "Select-String -Path 'backend/simulation_engine.py' -Pattern 'def find_contested'"`
+Viewed simulation_engine.py:679-740
+
+Now I have the full picture. Let me also check `_get_resolved_baseline_geometry` to confirm it doesn't cache:
+
+Viewed simulation_engine.py:90-128
+
+Now I have the complete picture. Here's my comprehensive diagnostic report:
+
+---
+
+## Comprehensive Log Diagnostic Report
+
+I've traced every line of the log against the source code. Here are all the inconsistencies, redundancies, and problems:
+
+---
+
+### 🔴 CRITICAL: Massive Redundant Work
+
+#### 1. `CountryPolygonLoader()` re-instantiated ~40+ times per simulation
+Every call to `CountryPolygonLoader()` re-reads and re-parses the provinces GeoJSON file from disk. The log shows **`[DATA] Loaded 4589 provinces into index.`** appearing **~40 times**. This is because:
+
+- `find_contested_provinces()` creates `loader = CountryPolygonLoader()` (line 684)
+- `_run_conquest_sim()` creates `loader = CountryPolygonLoader()` (line 1168)
+- `_run_final_simulation()` creates `loader = CountryPolygonLoader()` (line 1878)
+- `_process_territory_definitions()` creates `loader = CountryPolygonLoader()` (line 2383)
+- `resolve_modern_cities_to_historical_units()` creates `loader = CountryPolygonLoader()` (line 1074)
+- `baseline_resolver.py` creates it twice (lines 110, 171)
+- `get_countries_for_natural_boundary()` creates one (line 54)
+
+**The class has NO singleton pattern** — `__init__` loads from disk every time. Each instantiation reads + JSON-parses the provinces GeoJSON.
+
+#### 2. Contested provinces computed **TWICE** — identically
+The log clearly shows:
+```
+[SIMULATOR] Locating contested provinces for baseline polities ['Umayyad', 'Kingdom of the Franks'] (restricted to [...]) in 732 AD...
+[SIMULATOR] Contested provinces count: 436
+```
+Then later inside `_run_conquest_sim`:
+```
+[SIMULATOR] (Stage 1) Locating contested provinces for baseline polities ['Umayyad', 'Kingdom of the Franks'] in 732 AD...
+```
+`_run_final_simulation` calls `find_contested_provinces()` at **line 1852**, stores result in `context["contested_provinces"]`, but then `_run_conquest_sim` at **line 1171** calls `find_contested_provinces()` **again** with the same arguments, completely ignoring the cached result.
+
+#### 3. Baseline geometry resolved **4+ times** per polity
+Each polity ('Umayyad', 'Kingdom of the Franks') gets its Cliopatria shape resolved:
+- Once in `_run_final_simulation` for the "Before" map (line 1761)
+- Once in `find_contested_provinces()` called from `_run_final_simulation` (line 704)
+- Once in `_run_conquest_sim`'s own `find_contested_provinces()` call (line 704 again)
+- Once in `_run_conquest_sim`'s baseline ownership analysis (line 1183)
+- Once again in `_process_territory_definitions()` "Step 2: Merging baseline" (around line 2560+)
+
+The log shows **`[RESOLVER] Baseline shape for 'Umayyad' (732 AD) resolved via wikidata_structured_advanced`** appearing **at least 3 times**.
+
+#### 4. Baseline ownership analysis computed **TWICE**
+```
+[SIMULATOR] Analyzing baseline territorial ownership of contested provinces & historical administrative sub-provinces...
+```
+then:
+```
+[SIMULATOR] (Stage 1) Analyzing baseline territorial ownership...
+```
+`_run_final_simulation` at line 1857 computes ownership, then `_run_conquest_sim` at line 1174 does the exact same work — looping over 436 provinces × 2 polities, doing Shapely intersection tests again.
+
+---
+
+### 🟡 LLM / AI Issues
+
+#### 5. Optimistic expansion "approved" units already in realistic
+The log shows:
+```
+[SIMULATOR] Optimistic map identical to realistic. Shapely topology detected adjacent candidates: ['Al-Andalus', 'Austrasia', 'Flanders', 'Burgundy', 'Septimania']. Consulting AI...
+```
+AI approved `['Burgundy', 'Septimania']` — but **both Burgundy and Septimania were already in the realistic map** (`Aquitaine, Septimania, Provence, Neustria, Al-Andalus, Wilayah Egypt (Misr), Burgundy`). The expansion logic at line 1472 checks `h_opt.issubset(h_real)`, but the AI is approving candidates that are already present, defeating the purpose.
+
+#### 6. LLM generates phantom historical units: `Narbonensis` and `Arelate`
+```
+[DEBUG]     Historical unit 'Narbonensis' could not be matched to baseline shape index.
+[DEBUG]     Historical unit 'Arelate' could not be matched to baseline shape index.
+```
+The LLM generated `Arelate` and `Narbonensis` as historical provinces, but these don't exist in the Cliopatria/baseline index. These are valid historical names but they aren't in your data — the prompt should constrain the LLM to only use units from the `Available Historical Units/Themes` list.
+
+#### 7. LLM returns **two separate territory entries** both named "Umayyad Caliphate" for optimistic
+The optimistic LLM output contains two `TerritoryChange` objects both named `"Umayyad Caliphate"` with different provinces. This causes:
+- Two separate entries in the final optimistic summary
+- Double processing in `_process_territory_definitions`
+- Potential duplicate GeoJSON features
+
+#### 8. Model rate-limited and blacklisted mid-simulation
+```
+[WARN] Model 'gpt-4o-mini' failed structured invoke: Too many requests...
+[SIMULATOR] Permanently blacklisting model 'gpt-4o-mini' from further attempts.
+```
+The model got rate-limited mid-run, forcing a fallback to `meta/Llama-3.3-70B-Instruct`. Permanent blacklisting from a transient rate-limit is aggressive — the blacklist may persist across future sessions via `data/blacklisted_models.json`.
+
+#### 9. Demographics Wikipedia lookup is wasted
+```
+[DEMOGRAPHICS TOOL] Searching Wikipedia for: 'Demographics of Western Europe France Spain...'
+[DEMOGRAPHICS TOOL] Invoking extraction model 'gpt-4o'...
+[SIMULATOR] Demographics lookup status: Wikipedia articles found but contained no relevant historical demographics
+```
+This burns a `gpt-4o` API call (expensive) for 732 AD demographics that obviously don't exist on Wikipedia. For pre-1800 scenarios, this tool should be skipped entirely.
+
+---
+
+### 🟠 Architectural / Design Issues
+
+#### 10. `_process_territory_definitions` called **4 times** per simulation
+From the log, `[DEBUG] Step 1: Pre-processing shared/partitioned provinces...` appears **3 times**:
+1. Realistic features in `_run_conquest_sim` (line 1452)
+2. Optimistic features in `_run_conquest_sim` (line 1517) — but the optimistic path falls through to a second `_process_territory_definitions` because the "optimistic identical to realistic" path adds units, then calls it again
+3. The optimistic re-processing after expansion
+
+Each call instantiates a fresh `CountryPolygonLoader`, calls `get_historical_units` for each polity, and calls `_get_resolved_baseline_geometry` again.
+
+#### 11. Baseline geometry loaded **3 times** inside `_process_territory_definitions`
+```
+[DEBUG]   Loading baseline geometry for polity: 'Umayyad' at year 732...
+[DEBUG]     Baseline successfully loaded via wikidata_structured_advanced. Area: 933.5093
+```
+This appears **3 times** in the log — once for realistic, once for the first optimistic attempt (identical to realistic), and once for the re-processed optimistic. Each time it calls `_get_resolved_baseline_geometry` which calls into Cliopatria + baseline_resolver.
+
+#### 12. Spatial gap detection + bridge unit approval runs **multiple times**
+The gap detection for `Provence` disconnection runs **twice** (once for realistic, once for optimistic). The bridge unit AI approval prompt fires each time. Since the realistic scenario already approved `Al-Andalus`, `Wilayah Egypt (Misr)`, `Burgundy` as bridges, the optimistic run asks the exact same question and gets the exact same answer.
+
+---
+
+### Summary Table
+
+| Issue | Impact | Occurrences |
+|---|---|---|
+| `CountryPolygonLoader()` re-instantiation | ~40 disk reads per simulation | Every function call |
+| Contested provinces computed twice | ~870 Shapely intersections wasted | 2× |
+| Baseline geometry resolved 4+ times per polity | Redundant Cliopatria lookups | 4× per polity |
+| Baseline ownership analysis duplicated | 872 intersection tests × 2 polities wasted | 2× |
+| Demographics Wikipedia lookup for 732 AD | Wasted `gpt-4o` API call | 1× |
+| LLM phantom units (`Narbonensis`, `Arelate`) | Silently dropped, no map effect | 2 units |
+| Duplicate "Umayyad Caliphate" territory entries | Double processing, duplicate features | Optimistic |
+| Optimistic expansion approves already-present units | No actual expansion achieved | 2 units |
+| Model permanently blacklisted from transient rate-limit | Future sessions affected | Persistent |

@@ -1,0 +1,12 @@
+You are a historical counterfactual planner.
+Analyze the user scenario: "{scenario}".
+Identify two sequential historical conflict events (Stage 1 and Stage 2) that compound over time.
+
+Return a structured JSON with:
+- scenario_1: Title of the first historical event
+- year_1: Year of the first historical event
+- scenario_2: Title of the second historical event
+- year_2: Year of the second historical event
+- base_year: Starting historical year
+- timeline_span: Duration span in years
+- compounding_narrative: Description of how Stage 1 victory impacts Stage 2.

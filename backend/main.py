@@ -100,20 +100,25 @@ def run_simulate_start_background(job_id: str, scenario: str):
             "progress": "Analyzing geopolitical counterfactual context..."
         }
         res = simulate_start(scenario)
+        sess_id = res.get("session_id") or (res.get("result", {}).get("session_id") if isinstance(res.get("result"), dict) else None)
+        payload = res.get("result", res)
+        if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], dict) and "title" in payload["result"]:
+            payload = payload["result"]
+            
         if res.get("status") == "awaiting_verification":
             jobs_store[job_id] = {
                 "status": "awaiting_verification",
                 "progress": "Awaiting user verification of geopolitical anomalies",
-                "questions": res["questions"],
-                "result": res["result"],
-                "session_id": res["session_id"]
+                "questions": res.get("questions", []),
+                "result": payload,
+                "session_id": sess_id
             }
         else:
             jobs_store[job_id] = {
                 "status": "completed",
                 "progress": "Simulation complete",
-                "result": res["result"],
-                "session_id": res["session_id"]
+                "result": payload,
+                "session_id": sess_id
             }
     except Exception as e:
         trace = traceback.format_exc()

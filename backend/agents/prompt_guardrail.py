@@ -80,10 +80,10 @@ def refine_user_prompt(scenario: str) -> Dict[str, Any]:
             "is_valid": res.is_valid
         }
     except Exception as e:
-        print(f"[GUARDRAIL WARN] Guardrail invoke failed: {e}. Falling back to original prompt.", flush=True)
+        print(f"[GUARDRAIL WARN] Guardrail invoke failed: {e}.", flush=True)
         return {
             "refined_prompt": scenario,
             "original_prompt": scenario,
-            "corrections_made": "None (Guardrail model fallback)",
-            "is_valid": True
+            "corrections_made": f"Guardrail evaluation failed due to exception: {e}",
+            "is_valid": False
         }

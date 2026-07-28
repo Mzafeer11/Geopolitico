@@ -22,8 +22,10 @@ Thumbs.db
 # Project Scratch Directories
 scratch/
 test_*.py
+*.log
+*.pdf
+Census 1941/
 
 # Large Data & Cache Files
 data/*.geojson
-data/whg_cache/
 data/blacklisted_models.json
