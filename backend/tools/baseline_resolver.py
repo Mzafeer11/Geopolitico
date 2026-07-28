@@ -95,6 +95,16 @@ def _get_landmass_region(country_name: str) -> str:
     else:
         return "OTHER"
 
+
+def _get_province_color(unit_name: str, polity_name: str = "") -> str:
+    """Generate a deterministic, vibrant HSL color for a province or administrative unit."""
+    import colorsys
+    seed_str = f"{polity_name}:{unit_name}"
+    h_val = sum(ord(c) * (i + 1) for i, c in enumerate(seed_str))
+    hue = (h_val % 360) / 360.0
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.76, 0.92)
+    return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+
 def get_historical_units(
     polity_name: str,
     year: int,
@@ -253,6 +263,7 @@ def get_historical_units(
                 fullname = f"{pname} ({admin})"
                 rendered_geom = p_geom if category == "Fully Inside" else intersection
 
+                item_color = _get_province_color(best_unit or fullname, polity_name)
                 item_feat = {
                     "name": fullname,
                     "country": admin,
@@ -261,6 +272,8 @@ def get_historical_units(
                     "coverage_pct": coverage_pct,
                     "distance_km": round(best_dist_km, 1),
                     "snapped_boundary": snapped_boundary_name,
+                    "color": item_color,
+                    "fill_color": item_color,
                     "shape": rendered_geom
                 }
 
@@ -518,6 +531,7 @@ def generate_scenario_baseline_map(
         full_geojson = []
         for item in full_feats:
             if "shape" in item:
+                prov_color = item.get("color") or _get_province_color(item.get("assigned_unit") or item.get("name"), p_name)
                 f_out = {
                     "type": "Feature",
                     "geometry": mapping(item["shape"]),
@@ -527,7 +541,8 @@ def generate_scenario_baseline_map(
                         "assigned_unit": item.get("assigned_unit", p_name),
                         "category": "Fully Inside",
                         "coverage_pct": item.get("coverage_pct", 100.0),
-                        "color": base_color
+                        "color": prov_color,
+                        "fill_color": prov_color
                     }
                 }
                 full_geojson.append(f_out)
@@ -536,6 +551,7 @@ def generate_scenario_baseline_map(
         partial_geojson = []
         for item in partial_feats:
             if "shape" in item:
+                prov_color = item.get("color") or _get_province_color(item.get("assigned_unit") or item.get("name"), p_name)
                 f_out = {
                     "type": "Feature",
                     "geometry": mapping(item["shape"]),
@@ -545,7 +561,8 @@ def generate_scenario_baseline_map(
                         "assigned_unit": item.get("assigned_unit", p_name),
                         "category": "Partially Inside",
                         "coverage_pct": item.get("coverage_pct", 50.0),
-                        "color": base_color
+                        "color": prov_color,
+                        "fill_color": prov_color
                     }
                 }
                 partial_geojson.append(f_out)
@@ -744,6 +761,8 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
             sub_prov_features = []
             for p in res.get("provinces_core", []) + res.get("provinces_edge", []):
                 if "shape" in p and p["shape"] and not p["shape"].is_empty:
+                    u_name = p.get("assigned_unit") or p.get("name") or polity
+                    p_color = p.get("color") or _get_province_color(u_name, polity)
                     sub_prov_features.append({
                         "type": "Feature",
                         "geometry": mapping(p["shape"]),
@@ -751,10 +770,12 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
                             "name": p.get("name", polity),
                             "fullname": p.get("name", polity),
                             "empire": polity,
-                            "assigned_unit": p.get("assigned_unit", polity),
+                            "assigned_unit": u_name,
                             "status": p.get("category", "Fully Inside"),
                             "is_sub_province": True,
-                            "color": p.get("color", "#38bdf8"),
+                            "color": p_color,
+                            "fill_color": p_color,
+                            "stroke_color": "#0f172a",
                             "coverage_pct": p.get("coverage_pct", 100.0)
                         }
                     })
