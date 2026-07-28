@@ -1,10 +1,11 @@
 let map;
 let beforeLayer = null;
+let provincesLayer = null;
 let realisticLayer = null;
 let optimisticLayer = null;
 let districtsLayer = null;
 let auditLayer = null;
-let currentMode = "optimistic"; // "before", "realistic", "optimistic", "districts", or "audit"
+let currentMode = "optimistic"; // "before", "provinces", "realistic", "optimistic", "districts", or "audit"
 let boundaryOverlayLayer = null;
 let markerOverlayLayer = null;
 
@@ -29,12 +30,13 @@ function initMap() {
 }
 
 function renderScenarioMaps(
-    geojsonBefore, geojsonRealistic, geojsonOptimistic,
+    geojsonBefore, geojsonProvinces, geojsonRealistic, geojsonOptimistic,
     territoriesBefore, territoriesRealistic, territoriesOptimistic,
     geojsonDistricts, geojsonAudit
 ) {
     // Clear old layers
     if (beforeLayer) map.removeLayer(beforeLayer);
+    if (provincesLayer) map.removeLayer(provincesLayer);
     if (realisticLayer) map.removeLayer(realisticLayer);
     if (optimisticLayer) map.removeLayer(optimisticLayer);
     if (districtsLayer) map.removeLayer(districtsLayer);
@@ -138,6 +140,13 @@ function renderScenarioMaps(
         onEachFeature: onEachFeature
     });
 
+    if (geojsonProvinces) {
+        provincesLayer = L.geoJSON(geojsonProvinces, {
+            style: styleFeature,
+            onEachFeature: onEachFeature
+        });
+    }
+
     realisticLayer = L.geoJSON(geojsonRealistic, {
         style: styleFeature,
         onEachFeature: onEachFeature
@@ -175,6 +184,7 @@ function renderScenarioMaps(
 
 function getActiveLayer() {
     if (currentMode === "before") return beforeLayer;
+    if (currentMode === "provinces") return provincesLayer || beforeLayer;
     if (currentMode === "realistic") return realisticLayer;
     if (currentMode === "districts") return districtsLayer || realisticLayer;
     if (currentMode === "audit") return auditLayer || realisticLayer;
@@ -186,6 +196,7 @@ function updateMapLayers() {
     if (!map) return;
     
     if (beforeLayer) map.removeLayer(beforeLayer);
+    if (provincesLayer) map.removeLayer(provincesLayer);
     if (realisticLayer) map.removeLayer(realisticLayer);
     if (optimisticLayer) map.removeLayer(optimisticLayer);
     if (districtsLayer) map.removeLayer(districtsLayer);
@@ -271,7 +282,10 @@ function syncActiveLegendAndSummary() {
 
     if (currentMode === "before") {
         territories = data.territories_before;
-        summaryText = "Historical boundary in base year.";
+        summaryText = "Historical coarse baseline outer borders in base year.";
+    } else if (currentMode === "provinces") {
+        territories = null;
+        summaryText = "Province level sub-unit administrative breakdown map.";
     } else if (currentMode === "realistic") {
         territories = data.territories_after_realistic;
         summaryText = data.realistic_scenario_summary || "Realistic alternate boundary.";

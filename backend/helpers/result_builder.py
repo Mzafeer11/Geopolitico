@@ -50,6 +50,7 @@ def build_common_results(
     results["historical_context"] = context.get("baseline_description", "")
     results["what_actually_happened"] = "Real timeline outcome."
     results["geojson_before"] = geojson_before
+    results["geojson_provinces"] = context.get("geojson_provinces", geojson_before)
     results["territories_before"] = [
         {"name": p, "status": "baseline", "color": "#4b5563", "description": f"Baseline polity: {p}"}
         for p in all_baseline_polities

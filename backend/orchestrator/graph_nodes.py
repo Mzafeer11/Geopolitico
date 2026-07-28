@@ -100,32 +100,56 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
     contested = find_contested_provinces(all_baseline_polities, year, target_countries, is_partition=(simulation_mode == "proposal_partition"))
     prompt_contested = ", ".join(contested[:12]) if contested else "regional borders"
     
-    features_before = []
+    features_before_coarse = []
+    features_provinces = []
     
     for bp in all_baseline_polities:
         sh, feat_dict, tier = _get_resolved_baseline_geometry(bp, year, target_region)
         if sh is not None and not sh.is_empty:
             if feat_dict:
+                coarse_feat = {
+                    "type": "Feature",
+                    "geometry": feat_dict["geometry"],
+                    "properties": {
+                        **feat_dict.get("properties", {}),
+                        "Name": bp, "name": bp,
+                        "FromYear": year, "ToYear": year, "year": year,
+                        "tier": tier,
+                        "is_outer_border": True,
+                        "color": "#4b5563", "fill_color": "#4b5563"
+                    }
+                }
+                features_before_coarse.append(coarse_feat)
+                
                 sub_feats = feat_dict.get("properties", {}).get("sub_province_features", [])
                 if sub_feats:
-                    features_before.extend(sub_feats)
-                features_before.append(feat_dict)
+                    features_provinces.extend(sub_feats)
+                else:
+                    features_provinces.append(coarse_feat)
             else:
                 from shapely.geometry import mapping
-                features_before.append({
+                coarse_feat = {
                     "type": "Feature",
                     "geometry": mapping(sh),
                     "properties": {
                         "Name": bp, "name": bp,
                         "FromYear": year, "ToYear": year, "year": year,
                         "color": "#4b5563", "fill": "#4b5563", "fillOpacity": 0.45,
-                        "stroke": "#1f2937", "strokeWidth": 1.5
+                        "stroke": "#1f2937", "strokeWidth": 1.5,
+                        "is_outer_border": True
                     }
-                })
+                }
+                features_before_coarse.append(coarse_feat)
+                features_provinces.append(coarse_feat)
 
     geojson_before = {
         "type": "FeatureCollection",
-        "features": features_before
+        "features": features_before_coarse
+    }
+    
+    geojson_provinces = {
+        "type": "FeatureCollection",
+        "features": features_provinces
     }
     
     gis_context = ""
@@ -155,6 +179,7 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "contested_provinces": contested,
         "prompt_contested": prompt_contested,
         "geojson_before": geojson_before,
+        "geojson_provinces": geojson_provinces,
         "gis_context": gis_context,
         "osm_boundaries": osm_boundaries,
         "baseline_units_map": units_ownership_map

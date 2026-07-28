@@ -15,6 +15,7 @@ function bindEvents() {
     const backBtn = document.getElementById("back-btn");
     const presetCards = document.querySelectorAll(".preset-card");
     const modeBeforeBtn = document.getElementById("mode-before");
+    const modeProvincesBtn = document.getElementById("mode-provinces");
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
     const modeDistrictsBtn = document.getElementById("mode-districts");
@@ -22,7 +23,7 @@ function bindEvents() {
     const modeRiversBtn = document.getElementById("mode-rivers");
     const submitValidationBtn = document.getElementById("submit-validation-btn");
 
-    const allModeBtns = [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].filter(Boolean);
+    const allModeBtns = [modeBeforeBtn, modeProvincesBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].filter(Boolean);
 
     if (submitValidationBtn) {
         submitValidationBtn.addEventListener("click", () => {
@@ -105,6 +106,14 @@ function bindEvents() {
         modeBeforeBtn.classList.add("active");
         setMapMode("before");
     });
+
+    if (modeProvincesBtn) {
+        modeProvincesBtn.addEventListener("click", () => {
+            allModeBtns.forEach(btn => btn.classList.remove("active"));
+            modeProvincesBtn.classList.add("active");
+            setMapMode("provinces");
+        });
+    }
 
     modeRealisticBtn.addEventListener("click", () => {
         allModeBtns.forEach(btn => btn.classList.remove("active"));
@@ -623,6 +632,7 @@ function displayResults(result) {
     // Draw elements on Leaflet Map
     renderScenarioMaps(
         result.geojson_before,
+        result.geojson_provinces,
         result.geojson_after_realistic,
         result.geojson_after_optimistic,
         result.territories_before,
