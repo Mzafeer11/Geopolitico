@@ -425,7 +425,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                             break
 
     # Step 2: Merge baseline geometry with additions geometry
-    from backend.tools.baseline_resolver import _get_resolved_baseline_geometry
+    from backend.simulation_engine import _get_resolved_baseline_geometry
     
     resolved_territories = []
     baseline_polities = context.get("baseline_polities", []) if context else []

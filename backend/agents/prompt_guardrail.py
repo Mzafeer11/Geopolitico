@@ -2,8 +2,7 @@ import os
 from typing import Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
-from langchain_openai import ChatOpenAI
-from backend.config import GITHUB_TOKEN, GITHUB_API_URL, GITHUB_MODELS, EXHAUSTED_MODELS
+from backend.helpers.llm import invoke_structured_with_fallback
 
 class GuardrailResult(BaseModel):
     refined_prompt: str = Field(description="The cleaned, corrected, and historically aligned prompt.")
@@ -22,57 +21,13 @@ Your task is to review the user's alternate history scenario prompt and:
 
 def refine_user_prompt(scenario: str) -> Dict[str, Any]:
     """Refine user prompt for spelling, grammar, and historical consistency."""
-    # Find active model (prioritize gpt-4o for structured output)
-    # Load persistently blacklisted models
-    _BLACKLISTED_MODELS = set()
-    from backend.config import DATA_DIR
-    from pathlib import Path
-    import json
-    _BLACKLIST_FILE = Path(DATA_DIR) / "blacklisted_models.json"
-    if _BLACKLIST_FILE.exists():
-        try:
-            with open(_BLACKLIST_FILE, "r") as _f:
-                _BLACKLISTED_MODELS = set(json.load(_f))
-        except Exception:
-            pass
-
-    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS and m not in _BLACKLISTED_MODELS]
-    available_models = [m for m in available_models if "nano" not in m.lower()]
-    if not available_models:
-        available_models = [m for m in GITHUB_MODELS if "nano" not in m.lower()]
-        
-    model_to_use = None
-    for m in available_models:
-        if "gpt-4o" in m.lower():
-            model_to_use = m
-            break
-    if not model_to_use:
-        model_to_use = available_models[0]
-        
-    clean_model = model_to_use.replace("openai/", "", 1) if model_to_use.startswith("openai/") else model_to_use
-    token = os.environ.get("GITHUB_TOKEN", GITHUB_TOKEN)
-    
-    print(f"[GUARDRAIL] Invoking model '{clean_model}' to verify and refine prompt...", flush=True)
+    print(f"[GUARDRAIL] Invoking Groq guardrail model to verify and refine prompt...", flush=True)
     try:
-        llm = ChatOpenAI(
-            model=clean_model,
-            api_key=token,
-            base_url=GITHUB_API_URL,
-            temperature=0.2,
-            max_tokens=1024,
-            timeout=40.0
-        )
-        if "gpt-4o" not in clean_model.lower():
-            try:
-                llm.supports_function_calling = lambda: False
-            except Exception:
-                pass
-        structured_llm = llm.with_structured_output(GuardrailResult)
         messages = [
             SystemMessage(content=GUARDRAIL_SYSTEM_PROMPT),
             SystemMessage(content=f"User Prompt: {scenario}")
         ]
-        res: GuardrailResult = structured_llm.invoke(messages)
+        res: GuardrailResult = invoke_structured_with_fallback(GuardrailResult, messages, temperature=0.2, is_simple=True)
         return {
             "refined_prompt": res.refined_prompt,
             "original_prompt": res.original_prompt,

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from shapely.geometry import shape, mapping, MultiPolygon, Polygon
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 import networkx as nx
 
 try:
@@ -50,7 +51,11 @@ DISTRICT_ALIASES = {
     "attock": "campbellpore", "benazirabad": "nawabshah", "deraghazikhan": "deragazikhan",
     "firozpur": "ferozepur", "jalandhar": "jullundur", "hisar": "hissar",
     "kolkata": "calcutta", "mumbai": "bombay", "chennai": "madras", "bengaluru": "bangalore",
-    "prayagraj": "allahabad", "dhaka": "dacca", "barisal": "bakarganj",
+    "prayagraj": "allahabad", "dhaka": "dacca", "barisal": "bakarganj", "barishal": "bakarganj",
+    "comilla": "tippera", "cumilla": "tippera", "bogura": "bogra", "bogra": "bogra",
+    "chattogram": "chittagong", "chittagong": "chittagong", "jashore": "jessore", "jessore": "jessore",
+    "kushtia": "nadiya", "tangail": "mymeaningh", "jamalpur": "mymensingh", "kishoreganj": "mymensingh",
+    "cox's bazar": "chittagong", "coxsbazar": "chittagong", "bhabanipur": "dinajpur",
     "kozhikode": "calicut", "malappuram": "calicut", "kannur": "calicut", "kasaragod": "calicut"
 }
 
@@ -84,8 +89,8 @@ def clean_norm(text: str) -> str:
 
 
 def load_bangladesh_features() -> List[Dict[str, Any]]:
-    bgd_features = []
-    if NE_ADMIN1_GEOJSON.exists():
+    bgd_features = load_gadm_geojson(BGD_GADM)
+    if not bgd_features and NE_ADMIN1_GEOJSON.exists():
         with open(NE_ADMIN1_GEOJSON, "r", encoding="utf-8", errors="replace") as f:
             data = json.load(f)
             for feat in data.get("features", []):
@@ -97,8 +102,6 @@ def load_bangladesh_features() -> List[Dict[str, Any]]:
                     feat["properties"]["NAME_1"] = "Bengal"
                     feat["properties"]["NAME_2"] = p_name
                     bgd_features.append(feat)
-    if not bgd_features:
-        bgd_features = load_gadm_geojson(BGD_GADM)
     return bgd_features
 
 
@@ -352,38 +355,80 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "district": raw_d
         })
 
-    subcontinent_baseline_avg = weighted_baseline_sum / total_area if total_area > 0 else 24.0
-    scale_factor = target_pct / max(0.1, subcontinent_baseline_avg)
-
-    for item in processed_items:
-        scaled_val = min(99.5, item["baseline_pct"] * scale_factor)
-        item["current_pct"] = scaled_val
-
+    # Mathematical Formula Implementation from run_full_gadm_simulation.py
     num_items = len(processed_items)
-    adj_matrix = [[] for _ in range(num_items)]
+    shapes_list = [item["shape"] for item in processed_items]
+    spatial_tree = STRtree(shapes_list)
 
-    for i in range(num_items):
-        s_i = processed_items[i]["shape"]
-        for j in range(i + 1, num_items):
-            s_j = processed_items[j]["shape"]
-            if s_i.touches(s_j) or s_i.intersects(s_j):
-                adj_matrix[i].append(j)
-                adj_matrix[j].append(i)
+    adjacency_list = []
+    weighted_baselines = []
+    grand_total_pop = sum(item["population"] for item in processed_items)
 
-    iterations = 15
-    for _ in range(iterations):
-        next_pcts = []
+    for i, item in enumerate(processed_items):
+        item_shape = item["shape"]
+        dist_share = item["baseline_pct"] / 100.0
+
+        candidate_indices = spatial_tree.query(item_shape)
+        neighbors = []
+        neighbor_shares = []
+        for c_idx in candidate_indices:
+            if c_idx != i:
+                other_shape = shapes_list[c_idx]
+                if item_shape.touches(other_shape) or item_shape.intersects(other_shape):
+                    neighbors.append(c_idx)
+                    neighbor_shares.append(processed_items[c_idx]["baseline_pct"] / 100.0)
+
+        adjacency_list.append(neighbors)
+
+        if neighbor_shares:
+            avg_neighbor_share = sum(neighbor_shares) / len(neighbor_shares)
+        else:
+            avg_neighbor_share = dist_share
+
+        wb = (alpha * dist_share) + ((1.0 - alpha) * avg_neighbor_share)
+        weighted_baselines.append(wb)
+        item["weighted_baseline_pct"] = round(wb * 100.0, 2)
+        item["avg_neighbor_pct"] = round(avg_neighbor_share * 100.0, 1)
+
+    # Initial Target Allocation based on Target Scenario Ratio
+    target_scenario_ratio = target_pct / 100.0
+    target_muslim_pop_total = target_scenario_ratio * grand_total_pop
+    baseline_weighted_pop_denom = sum(wb * item["population"] for wb, item in zip(weighted_baselines, processed_items))
+
+    alloc_pop = []
+    for i, item in enumerate(processed_items):
+        wb = weighted_baselines[i]
+        init_m_pop = target_muslim_pop_total * (wb * item["population"]) / max(0.0001, baseline_weighted_pop_denom)
+        alloc_pop.append(init_m_pop)
+
+    # Cap at 100% of Population and Proportonally Redistribute Excess (Exact 1:1 match to run_full_gadm_simulation.py)
+    for _ in range(15):
+        excess_sum = 0.0
         for i in range(num_items):
-            local_val = processed_items[i]["current_pct"]
-            neighbors = adj_matrix[i]
-            if neighbors:
-                neigh_avg = sum(processed_items[n]["current_pct"] for n in neighbors) / len(neighbors)
-                blended = alpha * local_val + (1.0 - alpha) * neigh_avg
-            else:
-                blended = local_val
-            next_pcts.append(blended)
+            cap_pop = processed_items[i]["population"]
+            if alloc_pop[i] > cap_pop:
+                excess_sum += (alloc_pop[i] - cap_pop)
+                alloc_pop[i] = cap_pop
+
+        if excess_sum <= 10.0:
+            break
+
+        uncapped_total_cap = 0.0
         for i in range(num_items):
-            processed_items[i]["current_pct"] = next_pcts[i]
+            if alloc_pop[i] < processed_items[i]["population"]:
+                uncapped_total_cap += (processed_items[i]["population"] - alloc_pop[i])
+
+        if uncapped_total_cap > 0:
+            for i in range(num_items):
+                if alloc_pop[i] < processed_items[i]["population"]:
+                    free_cap = processed_items[i]["population"] - alloc_pop[i]
+                    alloc_pop[i] += excess_sum * (free_cap / uncapped_total_cap)
+
+    # Set final projected percentages
+    for i, item in enumerate(processed_items):
+        final_m_pop = min(item["population"], max(0.0, alloc_pop[i]))
+        new_m_pct = round(min(100.0, (final_m_pop / max(1.0, item["population"])) * 100.0), 1)
+        item["current_pct"] = new_m_pct
 
     district_spectrum_features = []
     audit_features = []
@@ -418,6 +463,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
                 "muslim_pct": round(c_pct, 2),
                 "baseline_pct": round(item["baseline_pct"], 2),
                 "population": int(item["population"]),
+                "color": fill_color,
                 "fill": fill_color,
                 "fillOpacity": 0.65,
                 "stroke": "#000000",
@@ -448,6 +494,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
                 "province": item["province"],
                 "country": item["country"],
                 "match_tier": audit_label,
+                "color": audit_color,
                 "fill": audit_color,
                 "fillOpacity": 0.70,
                 "stroke": "#000000",
@@ -507,43 +554,85 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             }
         })
 
-    # OPTIMISTIC CONTIGUOUS STATE PARTITION VIA HIGH-MINORITY NORTHERN CORRIDOR GRAPH
+    # OPTIMISTIC CONTIGUOUS STATE PARTITION VIA HIGH-MINORITY NORTHERN CORRIDOR GRAPH & ENCLAVE REMOVER
+    labels = ["Green" if processed_items[i]["current_pct"] >= 50.0 else "Red" for i in range(num_items)]
+
+    # Build weighted contiguity graph (cost is lower for higher Muslim %)
     G = nx.Graph()
     for i in range(num_items):
-        G.add_node(i, pct=processed_items[i]["current_pct"], is_pak=(processed_items[i]["current_pct"] >= 50.0))
-
-    for i in range(num_items):
-        for j in adj_matrix[i]:
+        pct_i = processed_items[i]["current_pct"]
+        G.add_node(i, pct=pct_i)
+        for j in adjacency_list[i]:
             if j > i:
-                G.add_edge(i, j)
+                pct_j = processed_items[j]["current_pct"]
+                cost = max(0.1, 100.0 - (pct_i + pct_j) / 2.0)
+                G.add_edge(i, j, weight=cost)
 
-    pak_nodes = [n for n, d in G.nodes(data=True) if d["is_pak"]]
-    subG_pak = G.subgraph(pak_nodes)
-    components = list(nx.connected_components(subG_pak))
+    # 1. Identify West Pakistan and East Pakistan components
+    green_nodes = [i for i in range(num_items) if labels[i] == "Green"]
+    G_green = G.subgraph(green_nodes)
+    green_comps = sorted(list(nx.connected_components(G_green)), key=len, reverse=True)
 
-    main_comp = max(components, key=len) if components else set()
+    if len(green_comps) >= 2:
+        west_comp = green_comps[0]
+        east_comp = green_comps[1]
 
-    corridor_nodes = set(main_comp)
-    for comp in components:
-        if comp == main_comp:
-            continue
-        shortest_path = None
-        min_len = 999999
-        for n_comp in comp:
-            for n_main in main_comp:
+        # Candidate nodes for corridor: districts with high Muslim minority share
+        high_minority_nodes = [i for i in range(num_items) if processed_items[i]["current_pct"] >= 25.0 or labels[i] == "Green"]
+        G_sub = G.subgraph(high_minority_nodes)
+
+        min_path = None
+        min_cost = 999999
+        w_sample = list(west_comp)[:30]
+        e_sample = list(east_comp)[:30]
+
+        for w in w_sample:
+            for e in e_sample:
                 try:
-                    p = nx.shortest_path(G, source=n_comp, target=n_main)
-                    if len(p) < min_len:
-                        min_len = len(p)
-                        shortest_path = p
-                except nx.NetworkXNoPath:
+                    path = nx.shortest_path(G_sub, source=w, target=e, weight="weight")
+                    cost = nx.path_weight(G_sub, path, weight="weight")
+                    if cost < min_cost:
+                        min_cost = cost
+                        min_path = path
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
                     pass
-        if shortest_path:
-            for node in shortest_path:
-                corridor_nodes.add(node)
 
-    pakistan_shapes_optimistic = [processed_items[i]["shape"] for i in corridor_nodes]
-    india_shapes_optimistic = [processed_items[i]["shape"] for i in range(num_items) if i not in corridor_nodes]
+        if min_path is None:
+            # Fallback to full weighted graph path
+            for w in w_sample:
+                for e in e_sample:
+                    try:
+                        path = nx.shortest_path(G, source=w, target=e, weight="weight")
+                        cost = nx.path_weight(G, path, weight="weight")
+                        if cost < min_cost:
+                            min_cost = cost
+                            min_path = path
+                    except (nx.NetworkXNoPath, nx.NodeNotFound):
+                        pass
+
+        if min_path:
+            for idx in min_path:
+                if labels[idx] != "Green":
+                    labels[idx] = "Green"
+
+    # 2. FULL ENCLAVE REMOVER HARMONIZATION (Exact 1:1 match to standalone script Image 2):
+    # After corridor bridging, green_comps[0] contains the unified Pakistan landmass.
+    # All remaining disconnected green components (green_comps[1:]) are harmonized to Red (India).
+    # All remaining disconnected red components inside Pakistan (red_comps[1:]) are harmonized to Green (Pakistan).
+    green_nodes = [i for i in range(num_items) if labels[i] == "Green"]
+    green_comps = sorted(list(nx.connected_components(G.subgraph(green_nodes))), key=len, reverse=True)
+    for comp in green_comps[1:]:
+        for idx in comp:
+            labels[idx] = "Red"
+
+    red_nodes = [i for i in range(num_items) if labels[i] == "Red"]
+    red_comps = sorted(list(nx.connected_components(G.subgraph(red_nodes))), key=len, reverse=True)
+    for comp in red_comps[1:]:
+        for idx in comp:
+            labels[idx] = "Green"
+
+    pakistan_shapes_optimistic = [processed_items[i]["shape"] for i in range(num_items) if labels[i] == "Green"]
+    india_shapes_optimistic = [processed_items[i]["shape"] for i in range(num_items) if labels[i] == "Red"]
 
     pak_union_opt = unary_union(pakistan_shapes_optimistic) if pakistan_shapes_optimistic else None
     ind_union_opt = unary_union(india_shapes_optimistic) if india_shapes_optimistic else None
@@ -577,8 +666,9 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     final_results = {
+        "scenario_mode": "demographic",
         "title": f"Demographic Shift & State Partition ({base_year} AD Baseline)",
-        "alternate_outcome": plan.prompt_explanation,
+        "alternate_outcome": f"Under this {target_pct}% demographic shift model, high-concentration corridors across northern India establish a contiguous sovereign landmass connecting West Pakistan and East Pakistan.",
         "key_changes": [
             f"Base Year Census Baseline: {base_year} AD",
             f"Target Demographic Concentration: {target_pct}%",
@@ -622,8 +712,8 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             {"name": "New Pakistan", "status": "direct_control", "color": "#059669", "description": "Optimistic 100% Contiguous State Corridor"},
             {"name": "New India", "status": "direct_control", "color": "#ea580c", "description": "Optimistic 100% Contiguous State Corridor"}
         ],
-        "historical_context": f"Demographic shift simulation based on {base_year} Census of India records.",
-        "what_actually_happened": "Historical 1947 Partition of British India.",
+        "historical_context": f"Demographic shift scenario evaluating a {target_pct}% concentration model based on official {base_year} Census of India district records.",
+        "what_actually_happened": "In the historical 1947 Partition of British India, the Radcliffe Line divided Punjab and Bengal, creating West Pakistan and East Pakistan as physically separated wings.",
         "base_year": base_year,
         "confidence_score": 0.92
     }
@@ -633,6 +723,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
         "results": final_results,
         "geojson_before": final_results["geojson_before"],
         "geojson_districts": final_results["geojson_districts"],
+        "geojson_audit": final_results["geojson_audit"],
         "realistic_features": realistic_features,
         "optimistic_features": optimistic_features
     }

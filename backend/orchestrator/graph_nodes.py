@@ -14,7 +14,7 @@ from backend.helpers.result_builder import build_common_results
 from backend.tools.compiler import process_territory_definitions
 from backend.tools.gis_tools import find_contested_provinces
 from backend.helpers.prompt_loader import _load_prompt_template
-from backend.tools.baseline_resolver import _get_resolved_baseline_geometry
+from backend.tools.baseline_resolver import _get_resolved_baseline_geometry, _get_province_color, get_historical_units
 from backend.pipelines.conquest import run_conquest_sim
 from backend.pipelines.compounding import run_compounding_stage1, run_compounding_stage2
 from backend.pipelines.partition import run_partition_sim
@@ -105,42 +105,60 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
     
     for bp in all_baseline_polities:
         sh, feat_dict, tier = _get_resolved_baseline_geometry(bp, year, target_region)
+        base_color = _get_province_color(bp, bp)
+        
         if sh is not None and not sh.is_empty:
-            if feat_dict:
-                coarse_feat = {
-                    "type": "Feature",
-                    "geometry": feat_dict["geometry"],
-                    "properties": {
-                        **feat_dict.get("properties", {}),
-                        "Name": bp, "name": bp,
-                        "FromYear": year, "ToYear": year, "year": year,
-                        "tier": tier,
-                        "is_outer_border": True,
-                        "color": "#4b5563", "fill_color": "#4b5563"
-                    }
+            from shapely.geometry import mapping
+            geom_map = feat_dict["geometry"] if (feat_dict and "geometry" in feat_dict) else mapping(sh)
+            coarse_feat = {
+                "type": "Feature",
+                "geometry": geom_map,
+                "properties": {
+                    "Name": bp, "name": bp,
+                    "FromYear": year, "ToYear": year, "year": year,
+                    "tier": tier,
+                    "is_outer_border": True,
+                    "color": base_color, "fill_color": base_color
                 }
-                features_before_coarse.append(coarse_feat)
-                
-                sub_feats = feat_dict.get("properties", {}).get("sub_province_features", [])
-                if sub_feats:
-                    features_provinces.extend(sub_feats)
-                else:
-                    features_provinces.append(coarse_feat)
-            else:
-                from shapely.geometry import mapping
-                coarse_feat = {
-                    "type": "Feature",
-                    "geometry": mapping(sh),
-                    "properties": {
-                        "Name": bp, "name": bp,
-                        "FromYear": year, "ToYear": year, "year": year,
-                        "color": "#4b5563", "fill": "#4b5563", "fillOpacity": 0.45,
-                        "stroke": "#1f2937", "strokeWidth": 1.5,
-                        "is_outer_border": True
-                    }
-                }
-                features_before_coarse.append(coarse_feat)
-                features_provinces.append(coarse_feat)
+            }
+            features_before_coarse.append(coarse_feat)
+            
+            # Direct sub-province feature resolution
+            res = get_historical_units(bp, year, target_region)
+            core_provs = res.get("provinces_core", [])
+            edge_provs = res.get("provinces_edge", [])
+            
+            if not core_provs and not edge_provs:
+                from backend.tools.baseline_resolver import _map_units_to_provinces_advanced
+                c_core, c_edge, _, _ = _map_units_to_provinces_advanced([])
+                core_provs, edge_provs = c_core, c_edge
+            
+            bp_sub_features = []
+            for item in core_provs + edge_provs:
+                if "shape" in item and item["shape"] and not item["shape"].is_empty:
+                    u_name = item.get("assigned_unit") or item.get("name") or bp
+                    p_name = item.get("name", bp)
+                    prov_color = item.get("color") or _get_province_color(u_name, bp)
+                    bp_sub_features.append({
+                        "type": "Feature",
+                        "geometry": mapping(item["shape"]),
+                        "properties": {
+                            "empire": bp,
+                            "name": p_name,
+                            "fullname": p_name,
+                            "assigned_unit": u_name,
+                            "category": item.get("category", "Fully Inside"),
+                            "status": item.get("category", "Fully Inside"),
+                            "coverage_pct": item.get("coverage_pct", 100.0),
+                            "color": prov_color,
+                            "fill_color": prov_color,
+                            "stroke_color": "rgba(255, 255, 255, 0.45)",
+                            "is_sub_province": True
+                        }
+                    })
+                    
+            if bp_sub_features:
+                features_provinces.extend(bp_sub_features)
 
     geojson_before = {
         "type": "FeatureCollection",
@@ -168,7 +186,6 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
     units_ownership_map = {}
     if year < 1800 and simulation_mode == "expansion_conquest":
         try:
-            from backend.tools.baseline_resolver import get_historical_units
             for bp in all_baseline_polities:
                 h_res = get_historical_units(bp, year, target_region)
                 units_ownership_map[bp] = list(h_res.get("historical_units_map", {}).keys())
@@ -260,35 +277,37 @@ def conquest_retry_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def result_assembly_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 13: Response payload compiler."""
-    if "results" in state and state["results"]:
-        return {"results": state["results"]}
-        
-    res_real = ScenarioStateResult(**state["res_real"])
-    res_opt = ScenarioStateResult(**state["res_opt"])
-    
-    results = {
-        "title": res_real.title,
-        "alternate_outcome": res_real.alternate_outcome,
-        "alternate_outcome_realistic": res_real.alternate_outcome,
-        "alternate_outcome_optimistic": res_opt.alternate_outcome,
-        "key_changes": list(dict.fromkeys(res_real.key_changes + res_opt.key_changes)),
-        "realistic_scenario_summary": res_real.alternate_outcome,
-        "optimistic_scenario_summary": res_opt.alternate_outcome,
-        "timeline": [t.model_dump() for t in res_real.timeline],
-        "butterfly_effects": list(dict.fromkeys(res_real.butterfly_effects + res_opt.butterfly_effects)),
-        "sources": list(dict.fromkeys(res_real.sources + res_opt.sources)),
-        "geojson_after_realistic": {"type": "FeatureCollection", "features": state.get("realistic_features", [])},
-        "geojson_after_optimistic": {"type": "FeatureCollection", "features": state.get("optimistic_features", [])},
-        "territories_after_realistic": [t.model_dump() for t in res_real.territories],
-        "territories_after_optimistic": [t.model_dump() for t in res_opt.territories]
-    }
-    
-    if "geojson_districts" in state:
-        results["geojson_districts"] = state["geojson_districts"]
-    
     all_baseline_polities = state.get("baseline_polities", state.get("parties", []))
-    build_common_results(results, state["year"], state, all_baseline_polities, state.get("geojson_before", {}))
     
+    if "results" in state and state["results"]:
+        results = state["results"]
+    else:
+        res_real = ScenarioStateResult(**state["res_real"])
+        res_opt = ScenarioStateResult(**state["res_opt"])
+        
+        results = {
+            "title": res_real.title,
+            "alternate_outcome": res_real.alternate_outcome,
+            "alternate_outcome_realistic": res_real.alternate_outcome,
+            "alternate_outcome_optimistic": res_opt.alternate_outcome,
+            "key_changes": list(dict.fromkeys(res_real.key_changes + res_opt.key_changes)),
+            "realistic_scenario_summary": res_real.alternate_outcome,
+            "optimistic_scenario_summary": res_opt.alternate_outcome,
+            "timeline": [t.model_dump() for t in res_real.timeline],
+            "butterfly_effects": list(dict.fromkeys(res_real.butterfly_effects + res_opt.butterfly_effects)),
+            "sources": list(dict.fromkeys(res_real.sources + res_opt.sources)),
+            "geojson_after_realistic": {"type": "FeatureCollection", "features": state.get("realistic_features", [])},
+            "geojson_after_optimistic": {"type": "FeatureCollection", "features": state.get("optimistic_features", [])},
+            "territories_after_realistic": [t.model_dump() for t in res_real.territories],
+            "territories_after_optimistic": [t.model_dump() for t in res_opt.territories]
+        }
+        
+        if "geojson_districts" in state:
+            results["geojson_districts"] = state["geojson_districts"]
+        if "geojson_audit" in state:
+            results["geojson_audit"] = state["geojson_audit"]
+            
+    build_common_results(results, state["year"], state, all_baseline_polities, state.get("geojson_before", {}))
     return {"results": results}
 
 

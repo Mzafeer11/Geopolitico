@@ -123,13 +123,17 @@ def check_geopolitical_anomalies(
         )
         
         print("[SIMULATOR] Launching Geopolitical Contiguity and Enclave Inspector...", flush=True)
-        checker_res: AnomalyCheckResult = invoke_structured_with_fallback(
-            AnomalyCheckResult,
-            [SystemMessage(content=prompt)],
-            temperature=0.2
-        )
+        try:
+            checker_res: AnomalyCheckResult = invoke_structured_with_fallback(
+                AnomalyCheckResult,
+                [SystemMessage(content=prompt)],
+                temperature=0.2
+            )
+        except Exception as e:
+            print(f"[WARN] Geopolitical anomaly inspection skipped due to LLM/network error: {e}", flush=True)
+            return False, []
         
-        if not checker_res.has_anomalies or not checker_res.questions:
+        if not checker_res or not checker_res.has_anomalies or not checker_res.questions:
             print("[SIMULATOR] No major contiguity enclaves detected.", flush=True)
             return False, []
             

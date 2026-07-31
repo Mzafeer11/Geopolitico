@@ -96,13 +96,13 @@ def _get_landmass_region(country_name: str) -> str:
         return "OTHER"
 
 
-def _get_province_color(unit_name: str, polity_name: str = "") -> str:
-    """Generate a deterministic, vibrant HSL color for a province or administrative unit."""
+def _get_province_color(unit_name: str, polity_name: str = "", province_name: str = "") -> str:
+    """Generate a deterministic, vibrant HSL color per historical administrative unit."""
     import colorsys
     seed_str = f"{polity_name}:{unit_name}"
     h_val = sum(ord(c) * (i + 1) for i, c in enumerate(seed_str))
     hue = (h_val % 360) / 360.0
-    r, g, b = colorsys.hsv_to_rgb(hue, 0.76, 0.92)
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.78, 0.90)
     return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
 
 def get_historical_units(
@@ -164,7 +164,8 @@ def get_historical_units(
     cache_inst = SimulationCache.get_instance()
     cached = cache_inst.get_historical_units(polity_name, year, region)
     if cached is not None and not target_boundary:
-        return cached
+        if cached.get("provinces_core") or cached.get("provinces_edge"):
+            return cached
 
     clio_feat = cliopatria_db.get_polity_geometry(polity_name, year)
     cliopatria_shape = None
@@ -263,7 +264,7 @@ def get_historical_units(
                 fullname = f"{pname} ({admin})"
                 rendered_geom = p_geom if category == "Fully Inside" else intersection
 
-                item_color = _get_province_color(best_unit or fullname, polity_name)
+                item_color = _get_province_color(best_unit or fullname, polity_name, pname)
                 item_feat = {
                     "name": fullname,
                     "country": admin,
@@ -398,13 +399,14 @@ def get_historical_units(
                         boundary_line = lines[0] if len(lines) == 1 else MultiLineString(lines)
                         computed_dir = _calculate_boundary_direction(cliopatria_shape, boundary_line)
                         
+                        t3_core, t3_edge, t3_geom, t3_stats = _map_units_to_provinces_advanced([])
                         return {
                             "polity": polity_name,
                             "year": year,
                             "tier": "llm_boundary",
                             "confidence": "inferred",
-                            "provinces_core": [],
-                            "provinces_edge": [],
+                            "provinces_core": t3_core,
+                            "provinces_edge": t3_edge,
                             "provinces_contested": [],
                             "geometry": cliopatria_shape,
                             "cliopatria_fallback_geometry": cliopatria_shape,
@@ -414,9 +416,7 @@ def get_historical_units(
                                 "direction_method": "centroid_comparison"
                             },
                             "metadata": {
-                                "units_found": 0,
-                                "units_mapped": 0,
-                                "units_unmapped": 0,
+                                **t3_stats,
                                 "wikidata_source": False,
                                 "wikipedia_source": False,
                                 "llm_boundary": True,
@@ -426,22 +426,27 @@ def get_historical_units(
         except Exception as e:
             print(f"[WARN] Tier 3 LLM boundary resolution failed: {e}", flush=True)
 
-    # ─── TIER 4: Cliopatria Coarse Fallback ────────────────────────────────────
+    # ─── TIER 4: Cliopatria Sub-Province Administrative Partition Fallback ──────
+    fallback_core, fallback_edge, fallback_geom, stats = ([], [], cliopatria_shape, {})
+    if cliopatria_shape is not None:
+        try:
+            fallback_core, fallback_edge, fallback_geom, stats = _map_units_to_provinces_advanced([])
+        except Exception as e:
+            print(f"[WARN] Sub-province fallback partitioning failed for '{polity_name}': {e}", flush=True)
+
     return {
         "polity": polity_name,
         "year": year,
-        "tier": "cliopatria_coarse",
-        "confidence": "low",
-        "provinces_core": [],
-        "provinces_edge": [],
+        "tier": "cliopatria_province_breakdown",
+        "confidence": "medium",
+        "provinces_core": fallback_core,
+        "provinces_edge": fallback_edge,
         "provinces_contested": [],
-        "geometry": cliopatria_shape,
+        "geometry": fallback_geom if fallback_geom else cliopatria_shape,
         "cliopatria_fallback_geometry": cliopatria_shape,
         "boundary_info": None,
         "metadata": {
-            "units_found": 0,
-            "units_mapped": 0,
-            "units_unmapped": 0,
+            **stats,
             "wikidata_source": False,
             "wikipedia_source": False,
             "llm_boundary": False,
@@ -730,8 +735,10 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
     from backend.tools.spatial_cache import SimulationCache
     cache_inst = SimulationCache.get_instance()
     cached = cache_inst.get_baseline_geometry(polity, year, region)
-    if cached is not None:
-        return cached
+    if cached is not None and isinstance(cached, tuple) and len(cached) >= 2 and cached[1]:
+        props = cached[1].get("properties", {})
+        if props.get("sub_province_features"):
+            return cached
 
     # Pre-fetch Cliopatria database shape as boundary fallback
     clio_feat = cliopatria_db.get_polity_geometry(polity, year)
@@ -762,7 +769,7 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
             for p in res.get("provinces_core", []) + res.get("provinces_edge", []):
                 if "shape" in p and p["shape"] and not p["shape"].is_empty:
                     u_name = p.get("assigned_unit") or p.get("name") or polity
-                    p_color = p.get("color") or _get_province_color(u_name, polity)
+                    p_color = p.get("color") or _get_province_color(u_name, polity, p.get("name", ""))
                     sub_prov_features.append({
                         "type": "Feature",
                         "geometry": mapping(p["shape"]),

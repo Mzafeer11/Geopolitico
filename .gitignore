@@ -25,6 +25,14 @@ test_*.py
 *.log
 *.pdf
 Census 1941/
+Indian Data/
+Pakistan Districts/
+
+custom_regional_painted_divisions.json
+gadm41_IND_1.json/
+gadm41_IND_3.json/
+gadm41_PAK_3.json/
+table_11_balochistan_all.csv
 
 # Large Data & Cache Files
 data/*.geojson

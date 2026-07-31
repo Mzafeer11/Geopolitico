@@ -18,6 +18,9 @@ def simulate_start(scenario: str) -> Dict[str, Any]:
     Start a geopolitical counterfactual simulation.
     Invokes the pure LangGraph orchestrator graph.
     """
+    from backend.tools.spatial_cache import SimulationCache
+    SimulationCache.get_instance().clear()
+    
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
     initial_state = {

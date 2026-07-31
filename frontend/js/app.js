@@ -578,15 +578,30 @@ function displayResults(result) {
     
     // Set map default mode: alternate after (optimistic)
     const modeBeforeBtn = document.getElementById("mode-before");
+    const modeProvincesBtn = document.getElementById("mode-provinces");
     const modeRealisticBtn = document.getElementById("mode-realistic");
     const modeOptimisticBtn = document.getElementById("mode-optimistic");
     const modeDistrictsBtn = document.getElementById("mode-districts");
     const modeAuditBtn = document.getElementById("mode-audit");
     const modeRiversBtn = document.getElementById("mode-rivers");
     
-    [modeBeforeBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
+    [modeBeforeBtn, modeProvincesBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
     
-    // Toggle displaying District Spectrum and Census Audit buttons
+    if (modeProvincesBtn) {
+        const mode = (result.scenario_mode || result.mode || result.pipeline || "").toLowerCase();
+        const isCompoundingOrConquest = (
+            mode.includes("compounding") || 
+            mode.includes("conquest") || 
+            mode.includes("expansion") ||
+            (result.scenario_type && (result.scenario_type.includes("compounding") || result.scenario_type.includes("conquest")))
+        );
+        if (isCompoundingOrConquest && result.geojson_provinces && result.geojson_provinces.features && result.geojson_provinces.features.length > 0) {
+            modeProvincesBtn.style.display = "inline-block";
+        } else {
+            modeProvincesBtn.style.display = "none";
+        }
+    }
+
     if (modeDistrictsBtn) {
         if (result.geojson_districts && result.geojson_districts.features && result.geojson_districts.features.length > 0) {
             modeDistrictsBtn.style.display = "inline-block";

@@ -51,8 +51,9 @@ def build_common_results(
     results["what_actually_happened"] = "Real timeline outcome."
     results["geojson_before"] = geojson_before
     results["geojson_provinces"] = context.get("geojson_provinces", geojson_before)
+    from backend.tools.baseline_resolver import _get_province_color
     results["territories_before"] = [
-        {"name": p, "status": "baseline", "color": "#4b5563", "description": f"Baseline polity: {p}"}
+        {"name": p, "status": "baseline", "color": _get_province_color(p, p), "description": f"Baseline polity: {p}"}
         for p in all_baseline_polities
     ]
     results["confidence_score"] = 0.85

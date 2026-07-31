@@ -68,6 +68,7 @@ class SimulationState(TypedDict, total=False):
     refinement_message: Optional[str]
     answers: Optional[Dict[str, str]]
     geojson_before: Dict[str, Any]
+    geojson_provinces: Dict[str, Any]
 
 
 def build_simulation_graph():

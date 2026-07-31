@@ -8,6 +8,7 @@ let auditLayer = null;
 let currentMode = "optimistic"; // "before", "provinces", "realistic", "optimistic", "districts", or "audit"
 let boundaryOverlayLayer = null;
 let markerOverlayLayer = null;
+let outerBorderOverlayLayer = null;
 
 function initMap() {
     // Center map roughly on Eurasia/Mediterranean region initially
@@ -41,6 +42,10 @@ function renderScenarioMaps(
     if (optimisticLayer) map.removeLayer(optimisticLayer);
     if (districtsLayer) map.removeLayer(districtsLayer);
     if (auditLayer) map.removeLayer(auditLayer);
+    if (outerBorderOverlayLayer) {
+        map.removeLayer(outerBorderOverlayLayer);
+        outerBorderOverlayLayer = null;
+    }
 
     const styleFeature = (feature) => {
         const props = feature.properties || {};
@@ -58,11 +63,11 @@ function renderScenarioMaps(
 
         if (props.is_sub_province) {
             return {
-                color: props.stroke_color || '#0f172a',
-                weight: props.stroke_weight || 1.8,
-                opacity: 0.95,
+                color: props.stroke_color || 'rgba(255, 255, 255, 0.40)',
+                weight: props.stroke_weight || 1.1,
+                opacity: 0.90,
                 fillColor: props.fill_color || props.color || '#38bdf8',
-                fillOpacity: props.fill_opacity || 0.50,
+                fillOpacity: props.fill_opacity || 0.75,
                 className: 'sub-province-polygon'
             };
         }
@@ -72,14 +77,17 @@ function renderScenarioMaps(
         const isTributary = status === 'tributary';
         const isDependency = isVassal || isTributary;
         
-        const finalColor = props.fill_color || props.color || getTerritoryColor(props.name, '#d4a853');
+        const finalColor = props.fill_color || props.color || props.fill || getTerritoryColor(props.name, '#d4a853');
+        const finalOpacity = (props.fillOpacity !== undefined && props.fillOpacity !== null) ? props.fillOpacity : (isTributary ? 0.25 : (isVassal ? 0.35 : 0.55));
+        const finalStroke = props.stroke || (isDependency ? 'rgba(255, 255, 255, 0.6)' : 'rgba(255, 255, 255, 0.4)');
+        const finalWeight = (props.strokeWidth !== undefined && props.strokeWidth !== null) ? props.strokeWidth : (isDependency ? 1 : 1.8);
 
         return {
             fillColor: finalColor,
-            weight: isDependency ? 1 : 1.8,
+            weight: finalWeight,
             opacity: 0.9,
-            color: isDependency ? 'rgba(255, 255, 255, 0.6)' : 'rgba(255, 255, 255, 0.4)',
-            fillOpacity: isTributary ? 0.25 : (isVassal ? 0.35 : 0.55),
+            color: finalStroke,
+            fillOpacity: finalOpacity,
             dashArray: isTributary ? '2, 6' : (isVassal ? '4, 4' : null),
             className: 'interactive-polygon'
         };
@@ -112,13 +120,23 @@ function renderScenarioMaps(
         const snappedTag = props.snapped_boundary ? `<span style="background:#8b5cf6; color:white; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:600; margin-left:4px;">Snapped: ${props.snapped_boundary}</span>` : '';
         const distStr = (props.distance_km !== undefined && props.distance_km !== null) ? `<p style="margin:2px 0;"><strong>Distance:</strong> ${props.distance_km} km</p>` : '';
         const capitalStr = props.capital ? `<p style="margin:2px 0;"><strong>Capital:</strong> ${props.capital}</p>` : '';
-        const popStr = props.population ? `<p style="margin:2px 0;"><strong>Population Est:</strong> ${props.population}</p>` : '';
+        
+        // Demographic Engine properties
+        const provStr = props.province ? `<p style="margin:2px 0;"><strong>Province / State:</strong> ${props.province} (${props.country || ''})</p>` : '';
+        const muslimPctStr = (props.muslim_pct !== undefined && props.muslim_pct !== null) ? `<p style="margin:2px 0;"><strong>Target Demographic %:</strong> <span style="color:#10b981; font-weight:bold; font-size:13px;">${props.muslim_pct}%</span></p>` : '';
+        const baselinePctStr = (props.baseline_pct !== undefined && props.baseline_pct !== null) ? `<p style="margin:2px 0;"><strong>1941 Census Baseline %:</strong> ${props.baseline_pct}%</p>` : '';
+        const matchTierStr = props.match_tier ? `<p style="margin:2px 0;"><strong>Census Audit Source:</strong> <span style="color:${props.color || '#38bdf8'}; font-weight:bold;">${props.match_tier}</span></p>` : '';
+        const popStr = props.population ? `<p style="margin:2px 0;"><strong>Population Est:</strong> ${Number(props.population).toLocaleString()}</p>` : '';
         
         const popupContent = `
             <div class="map-popup" style="font-family: Inter, sans-serif; font-size: 12px; color: #f8fafc; padding: 4px;">
-                <h3 style="margin:0 0 6px 0; font-size: 15px; color: ${props.color || '#38bdf8'};">${titleStr}</h3>
+                <h3 style="margin:0 0 6px 0; font-size: 15px; color: ${props.color || props.fill || '#38bdf8'};">${titleStr}</h3>
                 ${statusBadge} ${snappedTag}
                 <div style="margin-top: 6px;">
+                    ${provStr}
+                    ${muslimPctStr}
+                    ${baselinePctStr}
+                    ${matchTierStr}
                     ${empireStr}
                     ${unitStr}
                     ${distStr}
@@ -126,7 +144,7 @@ function renderScenarioMaps(
                     ${popStr}
                 </div>
                 <hr style="margin: 6px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.15);" />
-                <p class="popup-desc" style="margin:0; font-size:11px; color:#cbd5e1;">${props.description || 'Historical baseline feature.'}</p>
+                <p class="popup-desc" style="margin:0; font-size:11px; color:#cbd5e1;">${props.description || 'Historical census district feature.'}</p>
             </div>
         `;
         layer.bindPopup(popupContent, {
@@ -209,10 +227,35 @@ function updateMapLayers() {
         map.removeLayer(markerOverlayLayer);
         markerOverlayLayer = null;
     }
+    if (outerBorderOverlayLayer) {
+        map.removeLayer(outerBorderOverlayLayer);
+        outerBorderOverlayLayer = null;
+    }
 
     const activeLayer = getActiveLayer();
     if (activeLayer) {
         activeLayer.addTo(map);
+    }
+
+    // Draw broad outer border contour line around the whole empire when viewing Province Level
+    if (currentMode === "provinces") {
+        const data = window.activeScenarioData;
+        const geojsonBefore = data ? data.geojson_before : null;
+        if (geojsonBefore) {
+            outerBorderOverlayLayer = L.geoJSON(geojsonBefore, {
+                style: {
+                    fill: false,
+                    fillOpacity: 0,
+                    color: '#ffffff',
+                    weight: 3.8,
+                    opacity: 0.95,
+                    lineJoin: 'round'
+                },
+                interactive: false
+            });
+            outerBorderOverlayLayer.addTo(map);
+            outerBorderOverlayLayer.bringToFront();
+        }
     }
 
     // Only show natural boundary overlays when the user is in "rivers" (Natural Borders) view mode

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from shapely.geometry import LineString, MultiLineString
-from backend.config import GITHUB_TOKEN, GITHUB_API_URL, GITHUB_MODELS, EXHAUSTED_MODELS, DATA_DIR
+from backend.config import DATA_DIR
 
 # Helper to avoid rate limiting
 import time
@@ -361,38 +361,9 @@ def wikipedia_demographics_tool(scenario: str, target_region: str, target_countr
         return {"status": "error", "message": "No relevant Wikipedia articles found."}
         
     # Run structured LLM call to verify and parse facts
-    available_models = [m for m in GITHUB_MODELS if m not in EXHAUSTED_MODELS]
-    if not available_models:
-        available_models = GITHUB_MODELS.copy()
-        
-    model_to_use = None
-    for m in available_models:
-        if "gpt-4o" in m.lower():
-            model_to_use = m
-            break
-    if not model_to_use:
-        model_to_use = available_models[0]
-        
-    clean_model = model_to_use.replace("openai/", "", 1) if model_to_use.startswith("openai/") else model_to_use
-    token = os.environ.get("GITHUB_TOKEN", GITHUB_TOKEN)
-    
-    print(f"[DEMOGRAPHICS TOOL] Invoking extraction model '{clean_model}'...", flush=True)
+    print(f"[DEMOGRAPHICS TOOL] Invoking Groq extraction model...", flush=True)
     try:
-        llm = ChatOpenAI(
-            model=clean_model,
-            api_key=token,
-            base_url=GITHUB_API_URL,
-            temperature=0.0,
-            max_tokens=2048,
-            timeout=50.0
-        )
-        if "gpt-4o" not in clean_model.lower():
-            try:
-                llm.supports_function_calling = lambda: False
-            except Exception:
-                pass
-        structured_llm = llm.with_structured_output(ExtractedDemographics)
-        
+        from backend.helpers.llm import invoke_structured_with_fallback
         system_prompt = f"""You are a demographic data validation and verification system.
 Verify if the raw text contains historical, authentic demographic figures for the target scenario: "{scenario}".
 If relevant figures are found, extract the exact percentages for each province and list them. Discard irrelevant or modern noise.
@@ -402,7 +373,7 @@ Return a verified structured output."""
             SystemMessage(content=system_prompt),
             SystemMessage(content=f"Raw Wikipedia Text:\n{raw_text}")
         ]
-        res: ExtractedDemographics = structured_llm.invoke(messages)
+        res: ExtractedDemographics = invoke_structured_with_fallback(ExtractedDemographics, messages, temperature=0.0)
         
         if not res.is_relevant or not res.facts:
             return {

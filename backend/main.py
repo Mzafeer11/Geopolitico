@@ -182,13 +182,6 @@ async def simulate(req: SimulationRequest, background_tasks: BackgroundTasks):
     if not req.scenario:
         raise HTTPException(status_code=400, detail="Scenario input cannot be empty.")
         
-    token_to_use = req.token or os.environ.get("GITHUB_TOKEN")
-    if not token_to_use:
-        raise HTTPException(status_code=400, detail="GITHUB_TOKEN is missing.")
-        
-    if req.token:
-        os.environ["GITHUB_TOKEN"] = req.token
-        
     import uuid
     job_id = str(uuid.uuid4())
     
@@ -202,9 +195,6 @@ async def interactive_step(req: InteractiveRequest, background_tasks: Background
     import uuid
     job_id = str(uuid.uuid4())
     
-    if req.token:
-        os.environ["GITHUB_TOKEN"] = req.token
-        
     background_tasks.add_task(run_simulate_step_background, job_id, req.session_id, req.message)
     return {"job_id": job_id, "status": "queued"}
 
