@@ -271,6 +271,19 @@ def get_historical_units(
         elif len(valid_unit_points) == 1 and cliopatria_shape:
             voronoi_unit_shapes[valid_unit_names[0]] = cliopatria_shape
 
+        # Collect available landmass regions represented by valid units of this polity
+        available_unit_landmasses = set()
+        for u_n, u_meta in unit_meta_map.items():
+            u_inc = u_meta.get("inception") if u_meta else None
+            if u_inc and u_inc > year:
+                continue
+            u_country = u_meta.get("present_day_country", "") if u_meta else ""
+            u_lat = u_meta.get("latitude") if u_meta else None
+            u_lon = u_meta.get("longitude") if u_meta else None
+            u_reg = _get_landmass_region(u_country) if u_country else ("EUROPE" if u_lat and u_lat > 36.0 and u_lon < 25.0 else ("AFRICA" if u_lat and u_lat <= 37.0 and u_lon < 35.0 else ("ARABIAN_PENINSULA" if u_lat and u_lat < 30.0 and 45.0 < u_lon < 60.0 else ("PERSIA_CENTRAL_ASIA" if u_lat and u_lat >= 25.0 and u_lon >= 45.0 else ""))))
+            if u_reg:
+                available_unit_landmasses.add(u_reg)
+
         def _is_unit_compatible(prov_admin: str, u_name: str, u_meta: dict) -> bool:
             # Generic Temporal Inception Check (e.g. Tahert/Central Maghreb founded 761 AD > query year 732 AD)
             u_inc = u_meta.get("inception") if u_meta else None
@@ -284,16 +297,11 @@ def get_historical_units(
 
             u_reg = _get_landmass_region(u_country) if u_country else ("EUROPE" if u_lat and u_lat > 36.0 and u_lon < 25.0 else ("AFRICA" if u_lat and u_lat <= 37.0 and u_lon < 35.0 else ("ARABIAN_PENINSULA" if u_lat and u_lat < 30.0 and 45.0 < u_lon < 60.0 else ("PERSIA_CENTRAL_ASIA" if u_lat and u_lat >= 25.0 and u_lon >= 45.0 else ""))))
 
-            # Rule A: Europe vs Africa/Arabia/Persia (Never assign across Mediterranean Sea)
-            if prov_reg == "EUROPE" and u_reg in ["AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"]:
-                return False
-            if prov_reg in ["AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"] and u_reg == "EUROPE":
-                return False
-
-            # Rule B: Persian/Central Asian plateau vs Arabian Peninsula across Persian Gulf
-            if prov_reg == "PERSIA_CENTRAL_ASIA" and u_reg == "ARABIAN_PENINSULA":
-                return False
-            if prov_reg == "ARABIAN_PENINSULA" and u_reg == "PERSIA_CENTRAL_ASIA":
+            # SAME-LANDMASS PREFERENCE RULE:
+            # If the polity HAS candidate units on the province's same landmass, Disqualify water-crossing units!
+            # If the polity has NO candidate unit on the province's landmass (e.g. Ottoman/Byzantine across Bosphorus), ALLOW sea crossing!
+            has_same_landmass_unit = prov_reg in available_unit_landmasses
+            if has_same_landmass_unit and u_reg and u_reg != prov_reg:
                 return False
 
             return True
