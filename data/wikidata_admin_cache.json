@@ -97,7 +97,8 @@
         "name": "Central Maghreb (Tahert)",
         "latitude": 35.371,
         "longitude": 1.317,
-        "present_day_country": "Algeria"
+        "present_day_country": "Algeria",
+        "inception": 761
       },
       {
         "name": "Wilayah Tripolitania (Tripoli)",

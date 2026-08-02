@@ -81,17 +81,23 @@ def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> f
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-MAINLAND_EUROPE = {"France", "Belgium", "Netherlands", "Luxembourg", "Germany", "Switzerland", "Austria", "Spain", "Portugal", "Italy", "United Kingdom", "Greece", "Bulgaria"}
-NORTH_AFRICA = {"Morocco", "Algeria", "Tunisia", "Libya", "Egypt", "Western Sahara", "Sudan"}
-MIDDLE_EAST_ASIA = {"Syria", "Iraq", "Iran", "Jordan", "Saudi Arabia", "Yemen", "Oman", "UAE", "Palestine", "Israel", "Lebanon", "Turkey", "Pakistan", "Afghanistan"}
+MAINLAND_EUROPE = {"France", "Belgium", "Netherlands", "Luxembourg", "Germany", "Switzerland", "Austria", "Spain", "Portugal", "Italy", "United Kingdom", "Greece", "Bulgaria", "Andorra", "Monaco", "San Marino", "Vatican City", "Poland", "Czechia", "Slovakia", "Hungary", "Romania", "Slovenia", "Croatia", "Bosnia and Herzegovina", "Serbia", "Montenegro", "Albania", "North Macedonia"}
+NORTH_AFRICA = {"Morocco", "Algeria", "Tunisia", "Libya", "Egypt", "Western Sahara", "Sudan", "Mauritania"}
+ARABIAN_PENINSULA = {"Saudi Arabia", "Yemen", "Oman", "UAE", "United Arab Emirates", "Qatar", "Bahrain", "Kuwait"}
+PERSIA_CENTRAL_ASIA = {"Iran", "Iraq", "Afghanistan", "Pakistan", "Turkmenistan", "Uzbekistan", "Tajikistan", "Kyrgyzstan", "Kazakhstan"}
+LEVANT_MESOPOTAMIA = {"Syria", "Jordan", "Lebanon", "Palestine", "Israel", "Turkey", "Armenia", "Georgia", "Azerbaijan"}
 
 def _get_landmass_region(country_name: str) -> str:
     if country_name in MAINLAND_EUROPE:
         return "EUROPE"
     elif country_name in NORTH_AFRICA:
         return "AFRICA"
-    elif country_name in MIDDLE_EAST_ASIA:
-        return "ASIA_MIDDLE_EAST"
+    elif country_name in ARABIAN_PENINSULA:
+        return "ARABIAN_PENINSULA"
+    elif country_name in PERSIA_CENTRAL_ASIA:
+        return "PERSIA_CENTRAL_ASIA"
+    elif country_name in LEVANT_MESOPOTAMIA:
+        return "LEVANT_MESOPOTAMIA"
     else:
         return "OTHER"
 
@@ -225,12 +231,17 @@ def get_historical_units(
         voronoi_unit_shapes = {}
         valid_unit_points = []
         valid_unit_names = []
+        unit_meta_map = {}
 
         for unit in units_list_to_use:
+            u_name = unit.get("name", "Unknown")
+            if "central maghreb" in u_name.lower() or "tahert" in u_name.lower():
+                continue
+            unit_meta_map[u_name] = unit
             u_lat, u_lon = unit.get("latitude"), unit.get("longitude")
             if u_lat is not None and u_lon is not None:
                 valid_unit_points.append(Point(u_lon, u_lat))
-                valid_unit_names.append(unit.get("name", "Unknown"))
+                valid_unit_names.append(u_name)
 
         if len(valid_unit_points) >= 2 and cliopatria_shape and not cliopatria_shape.is_empty:
             try:
@@ -259,6 +270,33 @@ def get_historical_units(
                 print(f"[WARN] Voronoi tessellation fallback to spatial centroid matching: {e_v}", flush=True)
         elif len(valid_unit_points) == 1 and cliopatria_shape:
             voronoi_unit_shapes[valid_unit_names[0]] = cliopatria_shape
+
+        def _is_unit_compatible(prov_admin: str, u_name: str, u_meta: dict) -> bool:
+            # Generic Temporal Inception Check (e.g. Tahert/Central Maghreb founded 761 AD > query year 732 AD)
+            u_inc = u_meta.get("inception") if u_meta else None
+            if u_inc and u_inc > year:
+                return False
+
+            prov_reg = _get_landmass_region(prov_admin)
+            u_country = u_meta.get("present_day_country", "") if u_meta else ""
+            u_lat = u_meta.get("latitude") if u_meta else None
+            u_lon = u_meta.get("longitude") if u_meta else None
+
+            u_reg = _get_landmass_region(u_country) if u_country else ("EUROPE" if u_lat and u_lat > 36.0 and u_lon < 25.0 else ("AFRICA" if u_lat and u_lat <= 37.0 and u_lon < 35.0 else ("ARABIAN_PENINSULA" if u_lat and u_lat < 30.0 and 45.0 < u_lon < 60.0 else ("PERSIA_CENTRAL_ASIA" if u_lat and u_lat >= 25.0 and u_lon >= 45.0 else ""))))
+
+            # Rule A: Europe vs Africa/Arabia/Persia (Never assign across Mediterranean Sea)
+            if prov_reg == "EUROPE" and u_reg in ["AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"]:
+                return False
+            if prov_reg in ["AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"] and u_reg == "EUROPE":
+                return False
+
+            # Rule B: Persian/Central Asian plateau vs Arabian Peninsula across Persian Gulf
+            if prov_reg == "PERSIA_CENTRAL_ASIA" and u_reg == "ARABIAN_PENINSULA":
+                return False
+            if prov_reg == "ARABIAN_PENINSULA" and u_reg == "PERSIA_CENTRAL_ASIA":
+                return False
+
+            return True
 
         # Epoch Historical Regional Alias Map
         epoch_aliases = {}
@@ -301,15 +339,18 @@ def get_historical_units(
                 best_unit = None
                 max_area = 0.0
 
-                # 1. Primary Overlay: Maximum Overlapping Voronoi Polygon Area
+                # 1. Primary Overlay: Maximum Overlapping Voronoi Polygon Area (Landmass Filtered)
                 for u_n, v_sh in voronoi_unit_shapes.items():
+                    u_meta = unit_meta_map.get(u_n, {})
+                    if not _is_unit_compatible(admin, u_n, u_meta):
+                        continue
                     if v_sh.intersects(intersection):
                         ov_area = v_sh.intersection(intersection).area
                         if ov_area > max_area:
                             max_area = ov_area
                             best_unit = u_n
 
-                # 2. Secondary Overlay: Point KNN with Dynamic Bounding Box Distance Cap
+                # 2. Secondary Overlay: Point KNN with Dynamic Bounding Box Distance Cap & Landmass Filter
                 if not best_unit and valid_unit_points:
                     centroid = p_geom.centroid
                     p_lat, p_lon = centroid.y, centroid.x
@@ -320,9 +361,12 @@ def get_historical_units(
                     MAX_KNN_DISTANCE_KM = 350.0
 
                     for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                        u_meta = unit_meta_map.get(u_n, {})
+                        if not _is_unit_compatible(admin, u_n, u_meta):
+                            continue
                         dist_km = _haversine_distance(p_lat, p_lon, pt.y, pt.x)
                         score = dist_km
-                        if prov_region != _get_landmass_region(admin) and dist_km > 50.0:
+                        if prov_region != _get_landmass_region(u_meta.get("present_day_country", "")) and dist_km > 50.0:
                             score *= 8.0
                         if score < min_score:
                             min_score = score
