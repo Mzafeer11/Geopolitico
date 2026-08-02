@@ -100,10 +100,10 @@ def compound_splitter_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "compounding_plan": plan.model_dump(),
         "scenario_1": plan.scenario_1,
+        "year_1": plan.year_1,
         "scenario_2": plan.scenario_2,
-        "base_year": plan.base_year,
-        "timeline_span": plan.timeline_span,
-        "compounding_narrative": plan.compounding_narrative
+        "year_2": plan.year_2,
+        "year": plan.year_1
     }
 
 
