@@ -217,7 +217,7 @@ class CountryPolygonLoader:
             props = feature.get("properties", {})
             region = props.get("region") or ""
 
-            if normalize_str(region) == pname_norm:
+            if normalize_str(region) == pname_norm or pname_norm in normalize_str(region):
                 region_features.append(feature)
 
         if country_norm:

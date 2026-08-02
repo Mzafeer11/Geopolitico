@@ -8,86 +8,31 @@ from backend.tools.country_polygons import get_country_polygon_loader
 
 
 def force_conquest_provinces(territories: List[TerritoryChange], scenario_text: str):
-    """Post-processing guardrail to ensure critical scenario cities are added to territories."""
+    """Post-processing guardrail to dynamically ensure focal scenario cities are included in the victor's conquests via GIS spatial index (Zero hardcoded dictionaries)."""
+    loader = get_country_polygon_loader()
+    victor_t = territories[0] if territories else None
+    if not victor_t:
+        return
+        
+    if not hasattr(victor_t, "historical_provinces") or victor_t.historical_provinces is None:
+        victor_t.historical_provinces = []
+        
     scenario_lower = scenario_text.lower()
-    umayyad_t = None
-    for t in territories:
-        if "umayyad" in t.name.lower():
-            umayyad_t = t
-            break
-            
-    if umayyad_t:
-        if "constantinople" in scenario_lower:
-            if not hasattr(umayyad_t, "historical_provinces") or umayyad_t.historical_provinces is None:
-                umayyad_t.historical_provinces = []
-            for h_unit in ["Istanbul", "Opsikion Theme", "Thrace Theme"]:
-                if h_unit not in umayyad_t.historical_provinces:
-                    umayyad_t.historical_provinces.append(h_unit)
-                    
-            turkey_p = None
-            for p in umayyad_t.partial_countries:
-                if p.country.lower() == "turkey":
-                    turkey_p = p
-                    break
-            else:
-                turkey_p = PartialRegion(country="Turkey", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Byzantine Capital")
-                umayyad_t.partial_countries.append(turkey_p)
-            if "Istanbul (Turkey)" not in turkey_p.provinces:
-                turkey_p.provinces.append("Istanbul (Turkey)")
-        if "tours" in scenario_lower or "poitiers" in scenario_lower:
-            france_p = None
-            for p in umayyad_t.partial_countries:
-                if p.country.lower() == "france":
-                    france_p = p
-                    break
-            else:
-                france_p = PartialRegion(country="France", provinces=[], split_provinces=[], clip_method="provinces", clip_description="Conquered Tours region")
-                umayyad_t.partial_countries.append(france_p)
-            for f_prov in ["Vienne (France)", "Indre (France)", "Indre-et-Loire (France)", "Haute-Vienne (France)", "Deux-Sèvres (France)"]:
-                if f_prov not in france_p.provinces:
-                    france_p.provinces.append(f_prov)
-                    
-    # General post-processing to fully absorb countries on the conquered side of natural boundaries
-    NATURAL_BOUNDARY_CONQUEST_ABSORB = {
-        "rhine": {
-            "west_of_natural_boundary": ["France", "Belgium", "Luxembourg"],
-            "east_of_natural_boundary": ["Germany", "Switzerland", "Austria", "Netherlands"]
-        },
-        "danube": {
-            "south_of_natural_boundary": ["Bulgaria", "Greece", "Turkey", "North Macedonia", "Albania", "Kosovo", "Montenegro", "Bosnia and Herzegovina"],
-            "north_of_natural_boundary": ["Romania", "Moldova", "Ukraine", "Slovakia", "Hungary", "Austria"]
-        },
-        "loire": {
-            "south_of_natural_boundary": ["Spain", "Portugal"]
-        },
-        "pyrenees": {
-            "south_of_natural_boundary": ["Spain", "Portugal"]
-        }
-    }
     
-    for t in territories:
-        countries_to_absorb = set()
-        for p in t.partial_countries:
-            if p.clip_method == "natural_boundary" and p.clip_description:
-                desc_lower = p.clip_description.lower()
-                matched_boundary = None
-                for b_name in NATURAL_BOUNDARY_CONQUEST_ABSORB:
-                    if b_name in desc_lower:
-                        matched_boundary = b_name
-                        break
-                if matched_boundary:
-                    direction = p.clip_direction
-                    absorb_list = NATURAL_BOUNDARY_CONQUEST_ABSORB[matched_boundary].get(direction, [])
-                    for country_name in absorb_list:
-                        countries_to_absorb.add(country_name)
-                        
-        if countries_to_absorb:
-            for c in countries_to_absorb:
-                is_in_partials = any(p.country.lower() == c.lower() for p in t.partial_countries)
-                if is_in_partials:
-                    if c not in t.countries_absorbed:
-                        t.countries_absorbed.append(c)
-            t.partial_countries = [p for p in t.partial_countries if p.country.lower() not in [x.lower() for x in countries_to_absorb]]
+    # Dynamically scan loader.provinces_data for any city or province named in scenario_text
+    for feat_data in loader.provinces_data:
+        props = feat_data.get("properties", {})
+        name = props.get("name", "")
+        assigned_unit = props.get("assigned_unit", "")
+        
+        if not name:
+            continue
+            
+        clean_name = name.split("(")[0].strip()
+        if len(clean_name) >= 4 and clean_name.lower() in scenario_lower:
+            target_unit = assigned_unit if assigned_unit else clean_name
+            if target_unit and target_unit not in victor_t.historical_provinces:
+                victor_t.historical_provinces.append(target_unit)
 
 
 def resolve_modern_cities_to_historical_units(territories: List[TerritoryChange], year: int, context: Optional[Dict[str, Any]] = None):

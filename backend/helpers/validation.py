@@ -29,64 +29,21 @@ def run_geopolitical_validation(
     context: Dict[str, Any],
     stage1_conquests_str: str = ""
 ) -> ScenarioStateResult:
-    """Invoke the secondary validation LLM node to audit contiguity, remove enclaves, and enforce exclusivity."""
+    """Zero-latency programmatic geopolitical validation (0 LLM calls)."""
     try:
-        baseline_pols = context.get("baseline_polities", []) if context else []
-        winner_polity = baseline_pols[0] if baseline_pols else "Conqueror"
-        
-        template = _load_prompt_template("validation.txt")
-        if not template:
-            print("[WARN] Validation template validation.txt not found. Skipping validation node.", flush=True)
-            return result
-            
-        accumulated_baseline = "No prior stages."
-        effective_stage1 = stage1_conquests_str
-        if not effective_stage1 and context:
-            effective_stage1 = context.get("stage1_real_conquests_str", "") or context.get("stage1_opt_conquests_str", "")
-        if effective_stage1:
-            accumulated_baseline = (
-                "The following territories were conquered in earlier stages and MUST be preserved "
-                "in the current output. Do NOT remove, modify, or contradict these:\n"
-                + effective_stage1
-            )
+        print("[SIMULATOR] Programmatic Geopolitical & Topological Validation running...", flush=True)
+        force_conquest_provinces(result.territories, scenario)
+        resolve_modern_cities_to_historical_units(result.territories, year, context)
 
-        current_result_json = result.model_dump_json(indent=2)
-        prompt = template.format(
-            scenario=scenario,
-            year=year,
-            winner_polity=winner_polity,
-            accumulated_baseline=accumulated_baseline,
-            current_result_json=current_result_json
-        )
-        
-        print(f"[SIMULATOR] Launching Geopolitical Validation Node for '{winner_polity}'...", flush=True)
-        validated_data: ValidationTerritoriesResult = invoke_structured_with_fallback(
-            ValidationTerritoriesResult, 
-            [SystemMessage(content=prompt)], 
-            temperature=0.2
-        )
-        
-        try:
-            val_dump = json.dumps(validated_data.model_dump(), indent=2)
-            print(f"[DEBUG] Geopolitical Validation Node returned validated result:\n{val_dump}", flush=True)
-        except Exception:
-            pass
-
-        force_conquest_provinces(validated_data.territories, scenario)
-        resolve_modern_cities_to_historical_units(validated_data.territories, year, context)
-
-        for t in validated_data.territories:
+        for t in result.territories:
             if getattr(t, "historical_provinces", []):
                 t.countries_absorbed = []
                 t.partial_countries = []
-        
-        result.territories = validated_data.territories
-        
-        print("[SIMULATOR] Geopolitical Validation completed successfully.", flush=True)
+
+        print("[SIMULATOR] Programmatic Geopolitical Validation completed successfully (0 LLM calls).", flush=True)
         return result
     except Exception as e:
-        print(f"[WARN] Geopolitical Validation failed: {e}. Falling back to original result.", flush=True)
-        traceback.print_exc()
+        print(f"[WARN] Programmatic Geopolitical Validation error: {e}.", flush=True)
         return result
 
 

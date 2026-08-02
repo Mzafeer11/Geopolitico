@@ -19,5 +19,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_SIMPLE_MODEL = os.getenv("GROQ_SIMPLE_MODEL", "llama-3.1-8b-instant")
 GROQ_HEAVY_MODEL = os.getenv("GROQ_HEAVY_MODEL", "llama-3.3-70b-versatile")
 
+# Azure OpenAI Configuration
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://zach-resource.services.ai.azure.com/openai/v1")
+AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-5.6-sol")
+
 # Legacy compatibility exports if referenced elsewhere
 EXHAUSTED_MODELS = set()

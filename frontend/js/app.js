@@ -588,14 +588,7 @@ function displayResults(result) {
     [modeBeforeBtn, modeProvincesBtn, modeRealisticBtn, modeOptimisticBtn, modeDistrictsBtn, modeAuditBtn, modeRiversBtn].forEach(btn => { if (btn) btn.classList.remove("active"); });
     
     if (modeProvincesBtn) {
-        const mode = (result.scenario_mode || result.mode || result.pipeline || "").toLowerCase();
-        const isCompoundingOrConquest = (
-            mode.includes("compounding") || 
-            mode.includes("conquest") || 
-            mode.includes("expansion") ||
-            (result.scenario_type && (result.scenario_type.includes("compounding") || result.scenario_type.includes("conquest")))
-        );
-        if (isCompoundingOrConquest && result.geojson_provinces && result.geojson_provinces.features && result.geojson_provinces.features.length > 0) {
+        if (result.geojson_provinces && result.geojson_provinces.features && result.geojson_provinces.features.length > 0) {
             modeProvincesBtn.style.display = "inline-block";
         } else {
             modeProvincesBtn.style.display = "none";

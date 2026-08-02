@@ -53,7 +53,7 @@ def run_conquest_sim(
     from backend.helpers.prompt_loader import _load_prompt_template
     from backend.tools.baseline_resolver import get_historical_units
 
-    baseline_polities = context_val.get("baseline_polities", [])
+    baseline_polities = context_val.get("all_baseline_polities") or context_val.get("baseline_polities", [])
     target_countries = context_val.get("target_countries", [])
     
     restricted_countries = target_countries if target_countries else [
@@ -156,7 +156,8 @@ def run_conquest_sim(
             prompt_contested = prompt_contested[:30] + [f"... [and {len(prompt_contested) - 30} more contested provinces across target countries]"]
             
     all_available_units = set()
-    for bp in baseline_polities:
+    active_prompt_pols = context_val.get("all_baseline_polities") or context_val.get("parties") or baseline_polities
+    for bp in active_prompt_pols:
         res_hist = get_historical_units(bp, year_val, context_val.get("target_region", "") if context_val else "")
         h_map = res_hist.get("historical_units_map", {})
         all_available_units.update(h_map.keys())
@@ -173,45 +174,23 @@ def run_conquest_sim(
         "demographics_context": ""
     }
     
-    scenario_lower = scenario_val.lower()
-    targets = []
-    if "constantinople" in scenario_lower:
-        targets.append("- The siege of Constantinople was won. Therefore, you MUST annex 'Istanbul (Turkey)' to the Umayyad Caliphate. For the OPTIMISTIC scenario, you MUST fully annex Turkey by adding 'Turkey' to 'countries_absorbed' and you can expand deep into the Balkans. For the REALISTIC scenario, only annex the European Turkey / Marmara provinces (such as 'Istanbul', 'Edirne', 'Kırklareli', 'Tekirdağ', 'Çanakkale', 'Kocaeli', 'Bursa') but note that you are allowed to expand beyond Turkey/Marmara if plausible.")
-    if "tours" in scenario_lower or "poitiers" in scenario_lower:
-        targets.append("- The Battle of Tours was won. Therefore, you MUST annex key French provinces (such as 'Vienne (France)', 'Indre (France)', 'Indre-et-Loire (France)', 'Haute-Vienne (France)', 'Deux-Sèvres (France)') to the Umayyad Caliphate. You MUST also annex all of Southern France up to the Loire: add a partial_country for France, setting 'clip_method: natural_boundary', 'clip_description: Loire River', and 'clip_direction: south_of_natural_boundary'.")
-        
     target_instructions = ""
-    if targets:
-        target_instructions = "\nCRITICAL TARGET INSTRUCTIONS (REQUIRED CONQUESTS):\n" + "\n".join(targets)
-        
     if year_val < 1800:
         target_instructions += (
-            "\nCRITICAL ANCIENT CIVILIZATION GEOGRAPHY RULES (< 1800 AD):\n"
-            "- Since this simulation is in the year {year} (ancient/medieval era), modern sub-national province boundaries (like 'Vienne' or 'Aude') are historically irrelevant. "
-            "Do NOT list modern administrative province names in the 'provinces' field for PartialRegion.\n"
-            "- Instead, use 'clip_method: natural_boundary' and define the natural boundary in 'clip_description' "
-            "(e.g., 'Loire River', 'Pyrenees', 'Alps', 'Rhine River', 'Bosphorus') to partition the country cleanly. "
-            "Leave the 'provinces' array empty '[]' when using natural boundaries. The engine will automatically "
-            "clip the entire country along the river/mountain range in that direction.\n"
-            "- GEOGRAPHIC CONTIGUITY & NO LEAPFROGGING: All conquests MUST form a single, contiguous block extending directly from the baseline empire's borders. "
-            "Do NOT leapfrog over unconquered land (for example, do NOT annex Bulgaria or Romania unless you also annex Greece, Thrace, and Constantinople, "
-            "as they lie in between). Avoid isolated enclaves or disconnected territory.\n"
-            "- If a specific key city was captured (like Constantinople or Tours), you may list its containing modern "
-            "province (e.g., 'Istanbul (Turkey)' for Constantinople) in the 'provinces' list to represent that city."
+            f"\nCRITICAL ANCIENT/MEDIEVAL GEOGRAPHY RULES (< 1800 AD):\n"
+            f"- Since this simulation is in the year {year_val} (ancient/medieval era), select contiguous, historically authentic regional units from `available_historical_units` for `historical_provinces`.\n"
+            f"- SCENARIO FOCAL OBJECTIVE MANDATE: Identify any key cities, battlefields, or focal fortresses named or implied in the scenario prompt ({scenario_val}) (e.g. Constantinople, Tours, Vienna, Rome, Jerusalem). You MUST ensure the historical unit or province containing that primary focal objective is included in `historical_provinces`.\n"
+            f"- GEOGRAPHIC CONTIGUITY & NO LEAPFROGGING: All conquests MUST form a single, unbroken block attached directly to the conqueror's baseline borders. Avoid isolated enclaves or disconnected territory.\n"
+            f"- Set `countries_absorbed: []` and `partial_countries: []` when specifying `historical_provinces`."
         )
         
     if stage_num == 2 and baselines_override_real:
         stage1_real = context_val.get("stage1_real_conquests_str", "")
         target_instructions += (
             f"\nCRITICAL STAGE 2 MOMENTUM INSTRUCTIONS:\n"
-            f"- You achieved a major victory in the previous Stage 1 conflict (Constantinople). You start this stage with that expanded territory. "
-            f"Your military morale, resources, and power are extremely high. "
-            f"Your conquests in this stage MUST reflect this increased power and momentum. Be ambitious and push borders significantly!\n"
-            f"CRITICAL COMPLEMENTARY LOSS INSTRUCTIONS FOR DEFEATED PARTIES:\n"
-            f"- In Stage 1, the following territories were conquered from their original owners:\n{stage1_real}"
-            f"- Defeated parties (like Byzantine Empire) have LOST these territories. In your JSON response, you MUST "
-            f"reduce the territories of these defeated parties accordingly. Do NOT let the Byzantine Empire claim or "
-            f"absorb Turkey, Constantinople, or Greece, as those are now owned by the Umayyad Caliphate!"
+            f"- You achieved a major victory in the previous Stage 1 conflict. You start this stage with that expanded territory.\n"
+            f"- Defeated parties have LOST these territories:\n{stage1_real}\n"
+            f"- Reduce the territories of defeated parties accordingly."
         )
         
     realistic_answers_str = ""
@@ -248,7 +227,7 @@ def run_conquest_sim(
         prompt_vars["conquest_type"] = (
             "REALISTIC military simulation: Select a plausible, contiguous set of historical administrative units in `historical_provinces` "
             "that the conqueror would realistically annex based on the scenario victories and regional geography. "
-            "Do NOT restrict yourself to only 1 or 2 units if major victories occurred across multiple fronts (e.g. Anatolia, Thrace, and Gaul). "
+            "Select 2 to 4 contiguous historical units covering the immediate conflict front. "
             "Set `countries_absorbed`: [] and `partial_countries`: [] when specifying `historical_provinces`."
         )
         
@@ -310,23 +289,24 @@ def run_conquest_sim(
         else:
             prompt_vars["real_conquests_context"] = (
                 f"\nREALISTIC CONQUESTS ACHIEVED IN THIS EVENT:\n{real_conquests_str}"
-                "\nCRITICAL OPTIMISTIC EXPANSION REQUIREMENT:\n"
-                "- You MUST NOT return the same boundaries as the realistic scenario.\n"
-                "- Expand significantly beyond the realistic gains by adding several additional historical units in `historical_provinces` across all active fronts.\n"
-                "- STRICT RULE: Do NOT use modern country names in `countries_absorbed` or `partial_countries`. Set both to empty `[]` when `historical_provinces` are specified."
+                "\nCRITICAL OPTIMISTIC THEATER EXPANSION REQUIREMENT:\n"
+                "- OPTIMISTIC SCENARIO (Maximum Plausible Theater Annexation): Annex the maximum historically plausible territorial gain within the SAME regional theater of war (e.g., securing the full river basin or complete historical duchy system covering the active conflict front).\n"
+                "- CONTIGUITY & THEATER BOUND: Do NOT expand into distant, unrelated foreign realms outside the active campaign theater unless explicitly specified in the scenario prompt.\n"
+                "- Select 1 to 3 additional contiguous historical units in `historical_provinces` bordering the realistic conquests to complete the regional theater.\n"
+                "- Set `countries_absorbed`: [] and `partial_countries`: [] when `historical_provinces` are specified."
             )
             
         if stage_num == 2:
             prompt_vars["conquest_type"] = (
-                "OPTIMISTIC compounding simulation: This is a BEST-CASE scenario with maximum compounding power and moral from winning both wars. "
-                "You MUST expand significantly beyond the realistic conquests by adding relevant historical units across all fronts. "
+                "OPTIMISTIC compounding simulation: This is a BEST-CASE scenario representing maximum plausible expansion across active campaign fronts. "
+                "Select 1 to 3 additional contiguous historical units in `historical_provinces` bordering the realistic conquests. "
                 "Set `countries_absorbed`: [] and `partial_countries`: [] when specifying `historical_provinces`."
             )
         else:
             prompt_vars["conquest_type"] = (
-                "OPTIMISTIC military simulation: This is a BEST-CASE scenario representing maximum plausible expansion. "
-                "You MUST expand significantly beyond the realistic conquests. Be highly ambitious, add several additional historical units in `historical_provinces`, "
-                "do NOT return the same boundaries, and set `countries_absorbed`: [] and `partial_countries`: [] when `historical_provinces` are specified."
+                "OPTIMISTIC military simulation: This is a BEST-CASE scenario representing maximum plausible expansion within the active conflict theater. "
+                "Select 1 to 3 additional contiguous historical units in `historical_provinces` bordering the realistic conquests. "
+                "Do NOT jump into distant unrelated foreign realms. Set `countries_absorbed`: [] and `partial_countries`: [] when specifying `historical_provinces`."
             )
             
         prompt_vars["ownership_str"] = ownership_str_opt
@@ -399,32 +379,10 @@ def run_conquest_sim(
                                     candidate_adjacent.append(cand_key)
                                     
                     if candidate_adjacent:
-                        print(f"[SIMULATOR] Optimistic map identical to realistic. Shapely topology detected adjacent candidates: {candidate_adjacent}. Consulting AI for feasibility...", flush=True)
-                        ai_prompt = (
-                            f"The realistic scenario conquered historical units: {list(h_real)}. "
-                            f"For an OPTIMISTIC (best-case) scenario, the following physically adjacent historical units share a border: {candidate_adjacent}. "
-                            f"Evaluate which of these adjacent units are realistically and optimistically feasible to annex in a maximum expansion scenario. "
-                            f"Respond in JSON format: {{\"approved_units\": [list of approved unit names]}}"
-                        )
-                        approved = []
-                        try:
-                            class OptExpansionResult(BaseModel):
-                                approved_units: List[str] = []
-                            ai_res = invoke_structured_with_fallback(OptExpansionResult, [SystemMessage(content=ai_prompt)], temperature=0.2)
-                            approved = getattr(ai_res, "approved_units", [])
-                        except Exception:
-                            approved = []
-                            
-                        if approved:
-                            for app_u in approved:
-                                if app_u not in t_opt.historical_provinces and app_u not in h_real:
-                                    t_opt.historical_provinces.append(app_u)
-                                    print(f"[SIMULATOR] AI approved topological expansion unit: '{app_u}' for optimistic scenario.", flush=True)
-                        else:
-                            fallback_unit = candidate_adjacent[0]
-                            if fallback_unit not in h_real:
-                                t_opt.historical_provinces.append(fallback_unit)
-                                print(f"[SIMULATOR] AI rejected/unresponsive. Programmatically appended adjacent topological unit '{fallback_unit}' as fallback.", flush=True)
+                        print(f"[SIMULATOR] Optimistic map identical to realistic. Programmatically expanding into adjacent topological units: {candidate_adjacent[:3]}.", flush=True)
+                        for app_u in candidate_adjacent[:3]:
+                            if app_u not in t_opt.historical_provinces and app_u not in h_real:
+                                t_opt.historical_provinces.append(app_u)
 
     optimistic_features = process_territory_definitions(res_opt.territories, year_val, context_val)
     context_val.pop("stage2_baselines", None)

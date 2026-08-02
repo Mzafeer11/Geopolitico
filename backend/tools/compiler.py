@@ -155,7 +155,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
     is_conquest = (mode in ["expansion_conquest", "compounding_conquest"])
     parties_list = context.get("parties", []) if context else []
     baseline_pols = context.get("baseline_polities", []) if context else []
-    winner_polity = parties_list[0] if parties_list else (baseline_pols[0] if baseline_pols else None)
+    winner_polity = (context.get("winner_polity") if context else None) or (parties_list[0] if parties_list else (baseline_pols[0] if baseline_pols else None))
     
     for t in territories:
         has_additions = bool(getattr(t, "historical_provinces", []) or getattr(t, "countries_absorbed", []) or getattr(t, "partial_countries", []))
@@ -212,48 +212,129 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map_all.update(res_hist.get("historical_units_map", {}))
 
+            # Filter out conqueror baseline territories that were already part of the conqueror's baseline empire
+            if is_winner and winner_polity:
+                base_units_dict = get_historical_units(winner_polity, year)
+                winner_owned_units = set(base_units_dict.get("historical_units_map", {}).keys())
+                if getattr(t, "historical_provinces", []):
+                    t.historical_provinces = [hp for hp in t.historical_provinces if hp not in winner_owned_units and hp.lower() not in ["ifriqiya", "central maghreb"]]
+
             if winner_base_sh and not winner_base_sh.is_empty:
-                all_candidate_bridges = set()
-                for hp_name in list(t.historical_provinces):
-                    h_geom = None
+                target_polities = [bp for bp in baseline_pols if winner_polity and bp.lower() != winner_polity.lower()]
+                candidate_units_shapes = {}
+                for tp in target_polities:
+                    tp_res = get_historical_units(tp, year, context.get("target_region", "") if context else "")
+                    for item_f in (tp_res.get("provinces_core", []) + tp_res.get("provinces_edge", [])):
+                        u_name = item_f.get("assigned_unit") or item_f.get("province")
+                        u_sh = item_f.get("shape")
+                        if u_name and u_sh and not u_sh.is_empty:
+                            candidate_units_shapes.setdefault(u_name, []).append(u_sh)
+
+                if year >= 1800:
+                    winner_baseline_names = set(b.lower() for b in context.get("baseline_polities", [])) if context else set()
+                    for feat in loader.provinces_data:
+                        props = feat.get("properties", {})
+                        admin = props.get("admin") or ""
+                        if admin.lower() in winner_baseline_names:
+                            continue
+                        reg = props.get("region") or props.get("subregion") or props.get("name")
+                        g = feat.get("geometry")
+                        if reg and g:
+                            try:
+                                p_sh = shape(g)
+                                clean_reg = reg.split("-")[0].split("(")[0].strip()
+                                if clean_reg:
+                                    candidate_units_shapes.setdefault(clean_reg, []).append(p_sh)
+                            except Exception:
+                                pass
+
+                candidate_units_map = {uname: unary_union(sl) for uname, sl in candidate_units_shapes.items()}
+
+                def _get_geom_for_hp(name_str):
                     for h_key, geom in h_map_all.items():
-                        if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
-                            h_geom = geom
+                        if name_str.lower() in h_key.lower() or h_key.lower() in name_str.lower():
+                            if geom and not geom.is_empty:
+                                return geom
+                    for h_key, geom in candidate_units_map.items():
+                        if name_str.lower() in h_key.lower() or h_key.lower() in name_str.lower():
+                            if geom and not geom.is_empty:
+                                return geom
+                    matched_feats = loader.get_province_features(name_str, "")
+                    g_list = [shape(f["geometry"]) for f in matched_feats if f.get("geometry")]
+                    return unary_union(g_list) if g_list else None
+
+                for iter_step in range(5):
+                    requested_geoms = []
+                    for hp_name in list(t.historical_provinces):
+                        g_found = _get_geom_for_hp(hp_name)
+                        if g_found and not g_found.is_empty:
+                            requested_geoms.append(g_found)
+
+                    connected_body = winner_base_sh
+                    changed = True
+                    unconnected_geoms = list(requested_geoms)
+
+                    while changed:
+                        changed = False
+                        still_unconnected = []
+                        for g in unconnected_geoms:
+                            if connected_body.distance(g) <= 0.05:
+                                connected_body = unary_union([connected_body, g])
+                                changed = True
+                            else:
+                                still_unconnected.append(g)
+                        unconnected_geoms = still_unconnected
+
+                    if unconnected_geoms:
+                        target_isolated = unary_union(unconnected_geoms)
+                        from shapely.ops import nearest_points
+                        p1, p2 = nearest_points(connected_body, target_isolated)
+                        corridor = LineString([p1, p2]).buffer(0.5)
+
+                        best_cand_unit = None
+                        best_dist = 999.0
+                        for cand_u, cand_geom in candidate_units_map.items():
+                            if cand_u not in t.historical_provinces and cand_geom and not cand_geom.is_empty:
+                                if corridor.intersects(cand_geom):
+                                    d = connected_body.distance(cand_geom) + cand_geom.distance(target_isolated)
+                                    if d < best_dist:
+                                        best_dist = d
+                                        best_cand_unit = cand_u
+
+                        if best_cand_unit:
+                            print(f"[COMPILER-GAP] Step {iter_step+1}: Detected disconnected target region (gap distance: {connected_body.distance(target_isolated):.3f} deg). Automatically added intermediate bridging unit: '{best_cand_unit}'.", flush=True)
+                            t.historical_provinces.append(best_cand_unit)
+                        else:
+                            print(f"[COMPILER-GAP WARN] Step {iter_step+1}: Found disconnected region (gap distance: {connected_body.distance(target_isolated):.3f} deg), but no intermediate candidate unit intersected the corridor vector.", flush=True)
                             break
-                            
-                    if h_geom and not h_geom.is_empty and winner_base_sh.distance(h_geom) > 0.05:
-                        corridor = LineString([winner_base_sh.centroid, h_geom.centroid]).buffer(1.5)
-                        for bridge_key, bridge_geom in h_map_all.items():
-                            if bridge_key not in t.historical_provinces and bridge_geom and corridor.intersects(bridge_geom):
-                                all_candidate_bridges.add(bridge_key)
-                                
-                if all_candidate_bridges:
-                    candidate_list = sorted(list(all_candidate_bridges))
-                    ai_prompt = (
-                        f"Geographical gaps detected between baseline borders of {t.name} and conquered regions. "
-                        f"Candidate connecting historical units: {candidate_list}. "
-                        f"For the scenario '{scen_text}', evaluate which of these connecting units are realistically and optimistically feasible to include as part of the conquest corridor. "
-                        f"Respond in JSON format with field 'approved_units': [list of approved unit names]."
-                    )
-                    approved = []
-                    try:
-                        class GapBridgeResult(BaseModel):
-                            approved_units: List[str] = []
-                        ai_res = invoke_structured_with_fallback(GapBridgeResult, [SystemMessage(content=ai_prompt)], temperature=0.2)
-                        approved = getattr(ai_res, "approved_units", [])
-                    except Exception:
-                        approved = candidate_list[:2]
-                        
-                    if approved:
-                        for app_u in approved:
-                            if app_u not in t.historical_provinces:
-                                t.historical_provinces.append(app_u)
                     else:
-                        for bridge_u in candidate_list[:2]:
-                            if bridge_u not in t.historical_provinces:
-                                t.historical_provinces.append(bridge_u)
+                        print(f"[COMPILER-GAP] Step {iter_step+1}: All requested historical provinces are 100% contiguous with conqueror's baseline borders.", flush=True)
+                        break
 
         if getattr(t, "historical_provinces", []):
+            h_map = {}
+            for bp in baseline_pols:
+                res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
+                h_map.update(res_hist.get("historical_units_map", {}))
+            
+            for hp_name in t.historical_provinces:
+                hp_found = False
+                for h_key, geom in h_map.items():
+                    if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
+                        if geom and not geom.is_empty:
+                            polity_additions_shapes[t.name].append(geom)
+                            hp_found = True
+                            break
+                if not hp_found:
+                    matched_feats = loader.get_province_features(hp_name, "")
+                    for feat_data in matched_feats:
+                        g = feat_data.get("geometry")
+                        if g:
+                            try:
+                                polity_additions_shapes[t.name].append(shape(g))
+                            except Exception:
+                                pass
+
             t.countries_absorbed = []
             t.partial_countries = []
 
@@ -383,6 +464,9 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                             lines = [LineString(pt_list) for pt_list in paths if len(pt_list) >= 2]
                             if lines:
                                 b_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
+                        if not b_geom:
+                            from backend.tools.gis_tools import get_natural_boundary_geometry
+                            b_geom, _ = get_natural_boundary_geometry(b_name)
                                 
                     if not c_provinces:
                         try:
@@ -396,6 +480,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                         except Exception:
                             pass
                     else:
+                        added_provinces = []
                         for prov_f in c_provinces:
                             g = prov_f.get("geometry")
                             p_name = prov_f.get("properties", {}).get("name", "")
@@ -408,12 +493,17 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                                     )
                                     if clipped and not clipped.is_empty:
                                         polity_additions_shapes[t.name].append(clipped)
+                                        if p_name:
+                                            added_provinces.append(p_name)
                                 except Exception:
                                     pass
+                        if added_provinces:
+                            print(f"[NATURAL-BOUNDARY] '{p.clip_description}' ({p.clip_direction}) annexed {len(added_provinces)} modern provinces in {country_name}: {', '.join(added_provinces)}", flush=True)
 
         if getattr(t, "historical_provinces", []):
             h_map = {}
-            for bp in baseline_pols:
+            search_pols = list(set(baseline_pols + (context.get("parties", []) if context else []) + (context.get("all_baseline_polities", []) if context else [])))
+            for bp in search_pols:
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map.update(res_hist.get("historical_units_map", {}))
                 
@@ -437,10 +527,16 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
         stage2_baselines = context.get("stage2_baselines") if context else None
         comp_geoms = context.get("compounding_resolved_geoms") if context else None
         
-        if stage2_baselines and (t.name in stage2_baselines or winner_polity in stage2_baselines):
-            base_sh = stage2_baselines.get(t.name) or stage2_baselines.get(winner_polity)
-        elif comp_geoms and (t.name in comp_geoms or winner_polity in comp_geoms):
-            base_sh = comp_geoms.get(t.name) or comp_geoms.get(winner_polity)
+        if stage2_baselines:
+            for sb_key, sb_geom in stage2_baselines.items():
+                if t.name.lower() in sb_key.lower() or sb_key.lower() in t.name.lower():
+                    base_sh = sb_geom
+                    break
+        elif comp_geoms:
+            for cg_key, cg_geom in comp_geoms.items():
+                if t.name.lower() in cg_key.lower() or cg_key.lower() in t.name.lower():
+                    base_sh = cg_geom
+                    break
             
         if not base_sh:
             if actual_name not in baseline_polities:
@@ -576,12 +672,14 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
             else:
                 color = "#d4a853"
             
+        status_val = "direct_control" if t.status in ["direct_control", "conquered", "vassal"] else t.status
         features.append({
             "type": "Feature",
             "properties": {
                 "name": t.name,
                 "color": color,
-                "status": t.status,
+                "fill_color": color,
+                "status": status_val,
                 "description": t.description,
                 "capital": t.capital,
                 "population": t.population_estimate

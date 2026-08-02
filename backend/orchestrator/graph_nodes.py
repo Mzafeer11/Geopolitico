@@ -52,9 +52,29 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     
     res: PlanningResult = invoke_structured_with_fallback(PlanningResult, [SystemMessage(content=prompt)], temperature=0.3)
     
+    parties = list(res.parties) if res.parties else []
+    scen_lower = scenario.lower()
+    desc_lower = (res.baseline_description or "").lower()
+    combined_text = scen_lower + " " + desc_lower
+
+    winner_polity = ""
+    for p in parties:
+        if len(p) >= 3 and p.lower() in combined_text:
+            winner_polity = p
+            break
+
+    if winner_polity and parties and parties[0] != winner_polity:
+        print(f"[SAFEGUARD-1] Inverted party order detected in AI output. Reordering victor '{winner_polity}' to index 0 of parties.", flush=True)
+        parties.remove(winner_polity)
+        parties.insert(0, winner_polity)
+
+    if not winner_polity and parties:
+        winner_polity = parties[0]
+
     return {
         "year": res.year,
-        "parties": res.parties,
+        "parties": parties,
+        "winner_polity": winner_polity,
         "baseline_polities": res.baseline_polities,
         "simulation_mode": res.simulation_mode,
         "target_region": res.target_region,
@@ -88,25 +108,33 @@ def compound_splitter_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Node 5: Preprocess baseline geometries and contested provinces."""
+    """Node 5: Preprocess baseline geometries and contested provinces with spatial filtering."""
     scenario = state["scenario"]
     year = state["year"]
     parties = state.get("parties", [])
     target_region = state.get("target_region", "")
     target_countries = state.get("target_countries", [])
     simulation_mode = state.get("simulation_mode", "expansion_conquest")
-    all_baseline_polities = state.get("baseline_polities", parties)
-    
+    raw_baseline_polities = state.get("baseline_polities", parties)
+    winner_polity = state.get("winner_polity") or (parties[0] if parties else "")
+
+    # Phase 7: Spatial adjacency filter — drop non-contiguous distant polities (e.g. Poland, Venice)
+    from backend.helpers.programmatic_validator import filter_contiguous_baseline_polities
+    all_baseline_polities = filter_contiguous_baseline_polities(
+        raw_baseline_polities, winner_polity, year, target_countries
+    )
+
     contested = find_contested_provinces(all_baseline_polities, year, target_countries, is_partition=(simulation_mode == "proposal_partition"))
     prompt_contested = ", ".join(contested[:12]) if contested else "regional borders"
-    
+
     features_before_coarse = []
     features_provinces = []
-    
+    units_ownership_map = {}
+
     for bp in all_baseline_polities:
         sh, feat_dict, tier = _get_resolved_baseline_geometry(bp, year, target_region)
         base_color = _get_province_color(bp, bp)
-        
+
         if sh is not None and not sh.is_empty:
             from shapely.geometry import mapping
             geom_map = feat_dict["geometry"] if (feat_dict and "geometry" in feat_dict) else mapping(sh)
@@ -122,22 +150,22 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 }
             }
             features_before_coarse.append(coarse_feat)
-            
-            # Direct sub-province feature resolution
+
+            # Direct sub-province feature resolution (read from SimulationCache or resolve once)
             res = get_historical_units(bp, year, target_region)
             core_provs = res.get("provinces_core", [])
             edge_provs = res.get("provinces_edge", [])
-            
+            units_ownership_map[bp] = list(res.get("historical_units_map", {}).keys())
+
             if not core_provs and not edge_provs:
                 from backend.tools.baseline_resolver import _map_units_to_provinces_advanced
                 c_core, c_edge, _, _ = _map_units_to_provinces_advanced([])
                 core_provs, edge_provs = c_core, c_edge
-            
+
             bp_sub_features = []
             for item in core_provs + edge_provs:
-                if "shape" in item and item["shape"] and not item["shape"].is_empty:
-                    u_name = item.get("assigned_unit") or item.get("name") or bp
-                    p_name = item.get("name", bp)
+                    u_name = item.get("assigned_unit") or bp
+                    p_name = u_name
                     prov_color = item.get("color") or _get_province_color(u_name, bp)
                     bp_sub_features.append({
                         "type": "Feature",
@@ -156,7 +184,7 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
                             "is_sub_province": True
                         }
                     })
-                    
+
             if bp_sub_features:
                 features_provinces.extend(bp_sub_features)
 
@@ -164,15 +192,15 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "type": "FeatureCollection",
         "features": features_before_coarse
     }
-    
+
     geojson_provinces = {
         "type": "FeatureCollection",
         "features": features_provinces
     }
-    
+
     gis_context = ""
     osm_boundaries = {}
-    
+
     if simulation_mode == "proposal_partition":
         try:
             from backend.tools.gis_tools import get_natural_boundary_geometry
@@ -182,17 +210,9 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 gis_context = f"\nNATURAL BOUNDARY GEOMETRY LOADED: Chenab River (Kashmir) with {len(river_paths)} vector segments."
         except Exception as e:
             print(f"[WARN] Failed to load GIS boundary geometry: {e}", flush=True)
-            
-    units_ownership_map = {}
-    if year < 1800 and simulation_mode == "expansion_conquest":
-        try:
-            for bp in all_baseline_polities:
-                h_res = get_historical_units(bp, year, target_region)
-                units_ownership_map[bp] = list(h_res.get("historical_units_map", {}).keys())
-        except Exception as e:
-            print(f"[WARN] Preprocessing historical units failed: {e}", flush=True)
 
     return {
+        "all_baseline_polities": all_baseline_polities,
         "contested_provinces": contested,
         "prompt_contested": prompt_contested,
         "geojson_before": geojson_before,
@@ -204,33 +224,12 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def ownership_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Node 6: Territorial ownership analysis across baseline polities."""
-    scenario = state["scenario"]
-    year = state["year"]
+    """Node 6: Deterministic territorial ownership analysis (0 AI calls)."""
+    year = state.get("year", 732)
     parties = state.get("parties", [])
-    prompt_contested = state.get("prompt_contested", "")
-    
-    template = _load_prompt_template("baseline_ownership.txt")
-    prompt = template.format(
-        scenario=scenario,
-        year=year,
-        parties=", ".join(parties),
-        contested_provinces=prompt_contested
-    ) if template else f"Baseline ownership: {scenario}"
-    
-    class OwnershipResult:
-        def __init__(self, summary: str):
-            self.summary = summary
-            
-    try:
-        from pydantic import BaseModel
-        class OwnershipSchema(BaseModel):
-            ownership_summary: str
-        res = invoke_structured_with_fallback(OwnershipSchema, [SystemMessage(content=prompt)], temperature=0.3)
-        summary = res.ownership_summary
-    except Exception:
-        summary = f"Baseline territorial configuration for {', '.join(parties)} in {year} AD."
-        
+    contested = state.get("contested_provinces", [])
+    contested_str = ", ".join(contested[:5]) if contested else "borderlands"
+    summary = f"Baseline territorial configuration for {', '.join(parties)} in {year} AD across {contested_str}."
     return {"ownership_str": summary}
 
 
@@ -277,7 +276,7 @@ def conquest_retry_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def result_assembly_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 13: Response payload compiler."""
-    all_baseline_polities = state.get("baseline_polities", state.get("parties", []))
+    all_baseline_polities = state.get("all_baseline_polities") or state.get("baseline_polities", state.get("parties", []))
     
     if "results" in state and state["results"]:
         results = state["results"]
@@ -285,8 +284,12 @@ def result_assembly_node(state: Dict[str, Any]) -> Dict[str, Any]:
         res_real = ScenarioStateResult(**state["res_real"])
         res_opt = ScenarioStateResult(**state["res_opt"])
         
+        mode_val = state.get("simulation_mode", "expansion_conquest")
         results = {
             "title": res_real.title,
+            "scenario_mode": mode_val,
+            "mode": mode_val,
+            "pipeline": mode_val,
             "alternate_outcome": res_real.alternate_outcome,
             "alternate_outcome_realistic": res_real.alternate_outcome,
             "alternate_outcome_optimistic": res_opt.alternate_outcome,

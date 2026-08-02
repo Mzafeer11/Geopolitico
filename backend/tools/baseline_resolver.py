@@ -177,31 +177,101 @@ def get_historical_units(
 
     cache = _load_wikidata_cache()
     
-    # Matching polity in cache
     polity_data = None
     norm_target = normalize_name(polity_name)
+    best_match_key = None
+    best_match_score = -100
+    target_words = set(w.rstrip("s").rstrip("ish") for w in norm_target.split() if len(w) > 2)
     for c_name, c_data in cache.items():
-        if normalize_name(c_name) == norm_target or norm_target in normalize_name(c_name):
-            polity_data = c_data
-            break
+        c_norm = normalize_name(c_name)
+        c_words = set(w.rstrip("s").rstrip("ish") for w in c_norm.split() if len(w) > 2)
+        overlap = len(target_words & c_words)
+        if norm_target == c_norm or norm_target in c_norm or c_norm in norm_target or overlap >= 2:
+            num_units = len(c_data.get("admin_units", []))
+            score = overlap * 40
+            if c_norm == norm_target:
+                score += 100
+            score += min(num_units, 20) * 10
+            if c_name.strip().startswith("(") and c_name.strip().endswith(")"):
+                score -= 80
+            if score > best_match_score:
+                best_match_score = score
+                best_match_key = c_name
+
+    if best_match_key:
+        polity_data = cache[best_match_key]
 
     loader = get_country_polygon_loader()
 
     # Advanced Option 5 & Option 6 Mapping Loop
-    def _map_units_to_provinces_advanced(units_list: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    def _map_units_to_provinces_advanced(units_list: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
         core_features = []
         partial_features = []
         province_unit_counts: Dict[str, List[str]] = {}
         province_details: Dict[str, Dict[str, Any]] = {}
         units_mapped = 0
-        units_unmapped = 0
 
-        # Lazy load natural boundary for snapping ONLY if target_boundary is provided
+        # Filter out non-geographic entities (e.g. styles, coins, operations, battles)
+        clean_units = []
+        forbidden_keywords = {"style", "coins", "operation", "census", "war", "battle", "architecture"}
+        for u in units_list:
+            u_name_lower = u.get("name", "").lower()
+            if not any(k in u_name_lower for k in forbidden_keywords):
+                clean_units.append(u)
+
+        units_list_to_use = clean_units if clean_units else units_list
+
+        # Bounded Voronoi Polygon Tessellation Setup
+        voronoi_unit_shapes = {}
+        valid_unit_points = []
+        valid_unit_names = []
+
+        for unit in units_list_to_use:
+            u_lat, u_lon = unit.get("latitude"), unit.get("longitude")
+            if u_lat is not None and u_lon is not None:
+                valid_unit_points.append(Point(u_lon, u_lat))
+                valid_unit_names.append(unit.get("name", "Unknown"))
+
+        if len(valid_unit_points) >= 2 and cliopatria_shape and not cliopatria_shape.is_empty:
+            try:
+                from shapely.ops import voronoi_diagram
+                from shapely.geometry import MultiPoint, box
+                mp = MultiPoint(valid_unit_points)
+                v_diag = voronoi_diagram(mp, envelope=box(*cliopatria_shape.bounds).buffer(2.0))
+                
+                # Pair Voronoi cells to nearest unit point
+                for v_poly in v_diag.geoms:
+                    clipped_v = cliopatria_shape.intersection(v_poly)
+                    if clipped_v and not clipped_v.is_empty:
+                        min_d = float("inf")
+                        matched_u = None
+                        for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                            d = v_poly.distance(pt)
+                            if d < min_d:
+                                min_d = d
+                                matched_u = u_n
+                        if matched_u:
+                            if matched_u not in voronoi_unit_shapes:
+                                voronoi_unit_shapes[matched_u] = clipped_v
+                            else:
+                                voronoi_unit_shapes[matched_u] = unary_union([voronoi_unit_shapes[matched_u], clipped_v])
+            except Exception as e_v:
+                print(f"[WARN] Voronoi tessellation fallback to spatial centroid matching: {e_v}", flush=True)
+        elif len(valid_unit_points) == 1 and cliopatria_shape:
+            voronoi_unit_shapes[valid_unit_names[0]] = cliopatria_shape
+
+        # Epoch Historical Regional Alias Map
+        epoch_aliases = {}
+        if year <= 1000:
+            epoch_aliases = {
+                "germany": "Austrasia (Frankish Empire)",
+                "spain": "Al-Andalus",
+                "france": "Neustria / Aquitaine",
+                "portugal": "Gharb Al-Andalus",
+                "austria": "March of Austria",
+                "hungary": "Pannonia"
+            }
         natural_boundary_shapes = {}
-        if target_boundary:
-            buf = _get_lazy_natural_boundary_buffer(target_boundary)
-            if buf is not None:
-                natural_boundary_shapes[target_boundary] = buf
 
         for feat in loader.provinces_data:
             props = feat.get("properties", {})
@@ -228,54 +298,61 @@ def get_historical_units(
                         snapped_boundary_name = b_name
                         break
 
-                centroid = p_geom.centroid
-                p_lat, p_lon = centroid.y, centroid.x
-                prov_region = _get_landmass_region(admin)
-
                 best_unit = None
-                min_score = float("inf")
-                best_dist_km = 0.0
+                max_area = 0.0
 
-                for unit in units_list:
-                    u_lat, u_lon = unit.get("latitude"), unit.get("longitude")
-                    if u_lat is None or u_lon is None:
-                        continue
-                    u_name = unit.get("name", "Unknown")
-                    u_country = unit.get("present_day_country", "")
-                    unit_region = _get_landmass_region(u_country)
+                # 1. Primary Overlay: Maximum Overlapping Voronoi Polygon Area
+                for u_n, v_sh in voronoi_unit_shapes.items():
+                    if v_sh.intersects(intersection):
+                        ov_area = v_sh.intersection(intersection).area
+                        if ov_area > max_area:
+                            max_area = ov_area
+                            best_unit = u_n
 
-                    dist_km = _haversine_distance(p_lat, p_lon, u_lat, u_lon)
-                    score = dist_km
+                # 2. Secondary Overlay: Point KNN with Dynamic Bounding Box Distance Cap
+                if not best_unit and valid_unit_points:
+                    centroid = p_geom.centroid
+                    p_lat, p_lon = centroid.y, centroid.x
+                    prov_region = _get_landmass_region(admin)
 
-                    if prov_region != unit_region:
-                        score *= 8.0  # Sea barrier penalty
+                    min_score = float("inf")
+                    best_dist_km = 0.0
+                    MAX_KNN_DISTANCE_KM = 350.0
 
-                    if u_country and u_country.lower() in admin.lower():
-                        score *= 0.45  # Country match discount
+                    for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                        dist_km = _haversine_distance(p_lat, p_lon, pt.y, pt.x)
+                        score = dist_km
+                        if prov_region != _get_landmass_region(admin) and dist_km > 50.0:
+                            score *= 8.0
+                        if score < min_score:
+                            min_score = score
+                            best_unit = u_n
+                            best_dist_km = dist_km
 
-                    if score < min_score:
-                        min_score = score
-                        best_unit = u_name
-                        best_dist_km = dist_km
+                    if best_dist_km > MAX_KNN_DISTANCE_KM:
+                        best_unit = None
 
-                if not best_unit and units_list:
-                    best_unit = units_list[0].get("name", "Unknown")
+                # 3. Epoch Historical Regional Alias or Polity Name Fallback (No Hardcoded Strings!)
+                if not best_unit:
+                    admin_lower = admin.lower()
+                    best_unit = props.get("region") or props.get("subregion") or epoch_aliases.get(admin_lower) or polity_name
 
                 fullname = f"{pname} ({admin})"
                 rendered_geom = p_geom if category == "Fully Inside" else intersection
 
-                item_color = _get_province_color(best_unit or fullname, polity_name, pname)
+                item_color = _get_province_color(best_unit, polity_name, pname)
                 item_feat = {
                     "name": fullname,
                     "country": admin,
                     "province": pname,
                     "assigned_unit": best_unit,
                     "coverage_pct": coverage_pct,
-                    "distance_km": round(best_dist_km, 1),
+                    "distance_km": 0.0,
                     "snapped_boundary": snapped_boundary_name,
                     "color": item_color,
                     "fill_color": item_color,
-                    "shape": rendered_geom
+                    "shape": rendered_geom,
+                    "full_shape": p_geom
                 }
 
                 province_details[fullname] = item_feat
@@ -300,6 +377,14 @@ def get_historical_units(
 
         return core_features, partial_features, resolved_geom, stats
 
+    # Helper to save result to cache before returning
+    def _return_and_cache(result_dict: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            cache_inst.set_historical_units(polity_name, year, region, result_dict)
+        except Exception as e_c:
+            print(f"[WARN] Failed to write historical units to cache: {e_c}", flush=True)
+        return result_dict
+
     # ─── TIER 1: Wikidata Structured Data ──────────────────────────────────────
     if polity_data and polity_data.get("admin_units"):
         units = polity_data["admin_units"]
@@ -318,7 +403,7 @@ def get_historical_units(
                 for u_name, shapes_list in units_map.items() if shapes_list
             }
 
-            return {
+            return _return_and_cache({
                 "polity": polity_name,
                 "year": year,
                 "tier": "wikidata_structured_advanced",
@@ -339,14 +424,14 @@ def get_historical_units(
                     "option_5_landmass_knn": True,
                     "option_6_vector_clipping": True
                 }
-            }
+            })
 
     # ─── TIER 2: Wikipedia Text Parsing Fallback ────────────────────────────────
     if polity_data and polity_data.get("wikipedia_units"):
         units = polity_data["wikipedia_units"]
-        core, edge, geom, stats = _map_units_to_provinces(units)
+        core, edge, geom, stats = _map_units_to_provinces_advanced(units)
         if len(core) + len(edge) >= 3:
-            return {
+            return _return_and_cache({
                 "polity": polity_name,
                 "year": year,
                 "tier": "wikipedia_parsed",
@@ -364,7 +449,7 @@ def get_historical_units(
                     "llm_boundary": False,
                     "cliopatria_fallback": False
                 }
-            }
+            })
 
     # ─── TIER 3: LLM Natural Boundary + Centroid Direction ─────────────────────
     if cliopatria_shape is not None:
@@ -400,7 +485,7 @@ def get_historical_units(
                         computed_dir = _calculate_boundary_direction(cliopatria_shape, boundary_line)
                         
                         t3_core, t3_edge, t3_geom, t3_stats = _map_units_to_provinces_advanced([])
-                        return {
+                        return _return_and_cache({
                             "polity": polity_name,
                             "year": year,
                             "tier": "llm_boundary",
@@ -422,7 +507,7 @@ def get_historical_units(
                                 "llm_boundary": True,
                                 "cliopatria_fallback": False
                             }
-                        }
+                        })
         except Exception as e:
             print(f"[WARN] Tier 3 LLM boundary resolution failed: {e}", flush=True)
 
@@ -434,7 +519,7 @@ def get_historical_units(
         except Exception as e:
             print(f"[WARN] Sub-province fallback partitioning failed for '{polity_name}': {e}", flush=True)
 
-    return {
+    return _return_and_cache({
         "polity": polity_name,
         "year": year,
         "tier": "cliopatria_province_breakdown",
@@ -452,7 +537,7 @@ def get_historical_units(
             "llm_boundary": False,
             "cliopatria_fallback": True
         }
-    }
+    })
 
 
 def generate_scenario_baseline_map(
