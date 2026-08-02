@@ -120,9 +120,14 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Phase 7: Spatial adjacency filter — drop non-contiguous distant polities (e.g. Poland, Venice)
     from backend.helpers.programmatic_validator import filter_contiguous_baseline_polities
-    all_baseline_polities = filter_contiguous_baseline_polities(
-        raw_baseline_polities, winner_polity, year, target_countries
-    )
+    if simulation_mode == "compounding_conquest":
+        plan_dict = state.get("compounding_plan") or {}
+        year = plan_dict.get("year_2", year)
+        all_baseline_polities = list(dict.fromkeys(raw_baseline_polities))
+    else:
+        all_baseline_polities = filter_contiguous_baseline_polities(
+            raw_baseline_polities, winner_polity, year, target_countries
+        )
 
     contested = find_contested_provinces(all_baseline_polities, year, target_countries, is_partition=(simulation_mode == "proposal_partition"))
     prompt_contested = ", ".join(contested[:12]) if contested else "regional borders"

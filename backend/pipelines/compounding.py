@@ -24,6 +24,9 @@ def run_compounding_conquest(
     scenario_2 = plan_dict["scenario_2"]
     year_2 = plan_dict["year_2"]
     
+    parties_list = context.get("parties", [])
+    winner_name = parties_list[0] if parties_list else context.get("baseline_polities", ["Umayyad Caliphate"])[0]
+
     # --- STAGE 1 (First Event) ---
     print(f"[SIMULATOR] --- STAGE 1: Simulating first event '{scenario_1}' at {year_1} ---", flush=True)
     
@@ -40,6 +43,21 @@ def run_compounding_conquest(
         scenario_1, year_1, context_1, stage_num=1, answers=answers
     )
     
+    # Synchronize conqueror territory names to enable continuous geometric union across stages
+    for t in res_real_1.territories + res_opt_1.territories:
+        if winner_name.lower() in t.name.lower() or "umayyad" in t.name.lower():
+            t.name = winner_name
+
+    # Union winner's full 732 AD baseline geometry (Spain + North Africa + Middle East) into Stage 1 resolved shapes
+    from backend.tools.baseline_resolver import _get_resolved_baseline_geometry
+    winner_sh_732, _, _ = _get_resolved_baseline_geometry(winner_name, year_2, context.get("target_region", ""))
+    if winner_sh_732 and not winner_sh_732.is_empty:
+        for r_dict in [resolved_real_1, resolved_opt_1]:
+            if winner_name in r_dict and r_dict[winner_name] is not None:
+                r_dict[winner_name] = winner_sh_732.union(r_dict[winner_name])
+            else:
+                r_dict[winner_name] = winner_sh_732
+
     real_conquests_str_1 = build_conquest_summary_str(res_real_1.territories)
     opt_conquests_str_1 = build_conquest_summary_str(res_opt_1.territories)
     
@@ -63,6 +81,11 @@ def run_compounding_conquest(
         answers=answers
     )
     
+    # Synchronize conqueror territory names for Stage 2
+    for t in res_real_2.territories + res_opt_2.territories:
+        if winner_name.lower() in t.name.lower() or "umayyad" in t.name.lower():
+            t.name = winner_name
+
     compounding_results = {}
     compounding_results["title"] = f"{res_real_1.title} & {res_real_2.title}"
     compounding_results["alternate_outcome"] = (
@@ -95,6 +118,7 @@ def run_compounding_conquest(
             combined_timeline.append(t.model_dump())
     compounding_results["timeline"] = sorted(combined_timeline, key=lambda x: x["year"])
     
+    # Stage 2 features ALREADY contain the single Unified MultiPolygon of Stage 1 + Stage 2 + Baseline!
     compounding_results["geojson_after_realistic"] = {
         "type": "FeatureCollection",
         "features": realistic_features_2
@@ -111,6 +135,9 @@ def run_compounding_conquest(
 
 def run_compounding_stage1(state: Dict[str, Any]) -> Dict[str, Any]:
     """Execute compounding stage 1 and stage 2 pipeline."""
+    plan_dict = state.get("compounding_plan") or {}
+    year_2 = plan_dict.get("year_2", state.get("year", 732))
+    
     comp_results, res_real_2, res_opt_2, realistic_features_2, optimistic_features_2 = run_compounding_conquest(
         state["scenario"], state["year"], state
     )
@@ -119,7 +146,8 @@ def run_compounding_stage1(state: Dict[str, Any]) -> Dict[str, Any]:
         "res_real": res_real_2.model_dump(),
         "res_opt": res_opt_2.model_dump(),
         "realistic_features": realistic_features_2,
-        "optimistic_features": optimistic_features_2
+        "optimistic_features": optimistic_features_2,
+        "year": year_2
     }
 
 

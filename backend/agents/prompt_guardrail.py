@@ -21,7 +21,7 @@ Your task is to review the user's alternate history scenario prompt and:
 
 def refine_user_prompt(scenario: str) -> Dict[str, Any]:
     """Refine user prompt for spelling, grammar, and historical consistency."""
-    print(f"[GUARDRAIL] Invoking Groq guardrail model to verify and refine prompt...", flush=True)
+    print(f"[GUARDRAIL] Verifying and refining prompt via LLM fallback chain...", flush=True)
     try:
         messages = [
             SystemMessage(content=GUARDRAIL_SYSTEM_PROMPT),

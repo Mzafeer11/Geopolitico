@@ -186,11 +186,13 @@ def run_conquest_sim(
         
     if stage_num == 2 and baselines_override_real:
         stage1_real = context_val.get("stage1_real_conquests_str", "")
+        stage1_opt = context_val.get("stage1_opt_conquests_str", "")
         target_instructions += (
             f"\nCRITICAL STAGE 2 MOMENTUM INSTRUCTIONS:\n"
-            f"- You achieved a major victory in the previous Stage 1 conflict. You start this stage with that expanded territory.\n"
-            f"- Defeated parties have LOST these territories:\n{stage1_real}\n"
-            f"- Reduce the territories of defeated parties accordingly."
+            f"- You achieved major victories in the previous Stage 1 conflict. You start this stage with that expanded territory.\n"
+            f"- FOR REALISTIC SCENARIO: Defeated parties lost the realistic Stage 1 conquests:\n{stage1_real}\n"
+            f"- FOR OPTIMISTIC SCENARIO: Defeated parties lost the maximum optimistic Stage 1 conquests:\n{stage1_opt}\n"
+            f"- Reduce the starting territories of defeated parties accordingly in each respective scenario."
         )
         
     realistic_answers_str = ""

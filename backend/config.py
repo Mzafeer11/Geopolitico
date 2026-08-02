@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv()
+# Load environment variables from .env (override system env to reflect disk changes)
+load_dotenv(override=True)
 
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent

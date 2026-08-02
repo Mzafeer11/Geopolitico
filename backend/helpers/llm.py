@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 from groq import Groq
 from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage
 from backend.config import (
     GROQ_API_KEY,
     GROQ_SIMPLE_MODEL,
@@ -21,7 +22,6 @@ from backend.config import (
 # Verified Groq models that support Pydantic structured output / function calling
 VERIFIED_STRUCTURED_MODELS = [
     "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "qwen/qwen3.6-27b"
@@ -51,6 +51,7 @@ def fetch_available_groq_models() -> List[str]:
             raw_models = [m.get("id") for m in data.get("data", []) if m.get("id")]
             valid = [m for m in raw_models if m in VERIFIED_STRUCTURED_MODELS]
             if valid:
+                print("Valid: ", valid, flush=True)
                 return valid
     except Exception as e:
         print(f"[WARN] Failed to fetch Groq model list dynamically: {e}", flush=True)
@@ -111,42 +112,59 @@ def _try_groq(schema, messages, temperature=0.3):
         return None
 
     available_groq = fetch_available_groq_models()
-    candidate_priority = [
-        "llama-3.3-70b-versatile",
-        "mixtral-8x7b-32768",
-        "llama-3.1-8b-instant"
-    ]
-    models_to_try = [m for m in candidate_priority if m in available_groq and m in VERIFIED_STRUCTURED_MODELS]
-    for m in candidate_priority:
-        if m in VERIFIED_STRUCTURED_MODELS and m not in models_to_try:
+    models_to_try = list(available_groq)
+    for m in VERIFIED_STRUCTURED_MODELS:
+        if m not in models_to_try:
             models_to_try.append(m)
-
-    if not models_to_try:
-        models_to_try = VERIFIED_STRUCTURED_MODELS.copy()
 
     for model_name in models_to_try:
         print(f"[SIMULATOR-LLM] Invoking Groq fallback model '{model_name}' for structured output...", flush=True)
+        llm = ChatGroq(
+            model=model_name,
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=4096,
+            timeout=90.0,
+            max_retries=2
+        )
+        
+        # Tier 1: Try method="json_schema" (supported natively by gpt-oss and modern models)
         try:
-            llm = ChatGroq(
-                model=model_name,
-                api_key=api_key,
-                temperature=temperature,
-                max_tokens=4096,
-                timeout=90.0,
-                max_retries=2
-            )
+            structured_llm = llm.with_structured_output(schema, method="json_schema")
+            res = structured_llm.invoke(messages)
+            if res:
+                if hasattr(res, "model_dump_json"):
+                    print(f"[DEBUG] Groq Model '{model_name}' (json_schema) returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
+                return res
+        except Exception as e1:
+            pass
+
+        # Tier 2: Try default method (function_calling)
+        try:
             structured_llm = llm.with_structured_output(schema)
             res = structured_llm.invoke(messages)
             if res:
-                try:
-                    if hasattr(res, "model_dump_json"):
-                        print(f"[DEBUG] Groq Model '{model_name}' returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
-                except Exception:
-                    pass
+                if hasattr(res, "model_dump_json"):
+                    print(f"[DEBUG] Groq Model '{model_name}' (function_calling) returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
                 return res
-        except Exception as e:
-            print(f"[WARN] Groq model '{model_name}' attempt failed: {e}. Retrying next available model...", flush=True)
-            time.sleep(1.0)
+        except Exception as e2:
+            pass
+
+        # Tier 3: Try method="json_mode" with schema prompt injection
+        try:
+            schema_dict = schema.model_json_schema() if hasattr(schema, "model_json_schema") else {}
+            schema_msg = SystemMessage(content=f"JSON Output Requirement: You MUST output valid JSON strictly conforming to this JSON schema:\n{json.dumps(schema_dict, indent=2)}")
+            augmented_messages = [schema_msg] + list(messages)
+            structured_llm = llm.with_structured_output(schema, method="json_mode")
+            res = structured_llm.invoke(augmented_messages)
+            if res:
+                if hasattr(res, "model_dump_json"):
+                    print(f"[DEBUG] Groq Model '{model_name}' (json_mode) returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
+                return res
+        except Exception as e3:
+            print(f"[WARN] Groq model '{model_name}' attempts failed: {e3}. Retrying next available model...", flush=True)
+            time.sleep(0.5)
+
     return None
 
 
@@ -200,6 +218,9 @@ def invoke_structured_with_fallback(schema, messages, temperature=0.3, is_simple
     - Centralized entrypoint for ALL LLM calls across the codebase.
     - Priority order controlled dynamically by LLM_PROVIDER_ORDER env var (Default: "openrouter,groq,azure").
     """
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+
     raw_order = os.getenv("LLM_PROVIDER_ORDER", "openrouter,groq,azure")
     provider_order = [p.strip().lower() for p in raw_order.split(",") if p.strip()]
 
