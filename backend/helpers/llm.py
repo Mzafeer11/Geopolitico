@@ -21,10 +21,9 @@ from backend.config import (
 
 # Verified Groq models that support Pydantic structured output / function calling
 VERIFIED_STRUCTURED_MODELS = [
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
-    "qwen/qwen3.6-27b"
+    "llama-3.3-70b-versatile"
 ]
 
 
@@ -66,16 +65,16 @@ def _try_openrouter(schema, messages, temperature=0.3):
     if not openrouter_key:
         return None
     openrouter_candidates = [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3-nano-30b-a3b:free",
-        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-        "nvidia/nemotron-nano-12b-v2-vl:free",
-        "nvidia/nemotron-nano-9b-v2:free",
-        "google/gemma-4-31b-it:free",
         "google/gemma-4-26b-a4b-it:free",
         "openai/gpt-oss-20b:free",
         "inclusionai/ling-3.0-flash:free",
+        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "nvidia/nemotron-nano-12b-v2:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-nano-9b-v2:free",
         "cohere/north-mini-code:free",
         "poolside/laguna-s-2.1:free"
     ]
@@ -117,6 +116,16 @@ def _try_groq(schema, messages, temperature=0.3):
         if m not in models_to_try:
             models_to_try.append(m)
 
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    # Ensure messages array contains at least one HumanMessage / user query for Qwen template rendering on Groq
+    groq_messages = list(messages)
+    has_human = any(isinstance(m, HumanMessage) or getattr(m, "type", "") in ["human", "user"] for m in groq_messages)
+    if not has_human and groq_messages:
+        last_m = groq_messages[-1]
+        c_text = last_m.content if hasattr(last_m, "content") else str(last_m)
+        groq_messages[-1] = HumanMessage(content=c_text)
+
     for model_name in models_to_try:
         print(f"[SIMULATOR-LLM] Invoking Groq fallback model '{model_name}' for structured output...", flush=True)
         llm = ChatGroq(
@@ -131,7 +140,7 @@ def _try_groq(schema, messages, temperature=0.3):
         # Tier 1: Try method="json_schema" (supported natively by gpt-oss and modern models)
         try:
             structured_llm = llm.with_structured_output(schema, method="json_schema")
-            res = structured_llm.invoke(messages)
+            res = structured_llm.invoke(groq_messages)
             if res:
                 if hasattr(res, "model_dump_json"):
                     print(f"[DEBUG] Groq Model '{model_name}' (json_schema) returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
@@ -142,7 +151,7 @@ def _try_groq(schema, messages, temperature=0.3):
         # Tier 2: Try default method (function_calling)
         try:
             structured_llm = llm.with_structured_output(schema)
-            res = structured_llm.invoke(messages)
+            res = structured_llm.invoke(groq_messages)
             if res:
                 if hasattr(res, "model_dump_json"):
                     print(f"[DEBUG] Groq Model '{model_name}' (function_calling) returned structured result:\n{res.model_dump_json(indent=2)}", flush=True)
@@ -154,7 +163,7 @@ def _try_groq(schema, messages, temperature=0.3):
         try:
             schema_dict = schema.model_json_schema() if hasattr(schema, "model_json_schema") else {}
             schema_msg = SystemMessage(content=f"JSON Output Requirement: You MUST output valid JSON strictly conforming to this JSON schema:\n{json.dumps(schema_dict, indent=2)}")
-            augmented_messages = [schema_msg] + list(messages)
+            augmented_messages = [schema_msg] + list(groq_messages)
             structured_llm = llm.with_structured_output(schema, method="json_mode")
             res = structured_llm.invoke(augmented_messages)
             if res:

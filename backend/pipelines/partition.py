@@ -36,6 +36,13 @@ def run_partition_sim(scenario: str, year: int, state: Dict[str, Any]) -> Dict[s
     
     res: ScenarioStateResult = invoke_structured_with_fallback(ScenarioStateResult, [SystemMessage(content=partition_prompt)], temperature=0.7)
     
+    print(f"[PARTITION-DEBUG] LLM Raw Response Territories ({len(res.territories)}):", flush=True)
+    for t in res.territories:
+        print(f"  - {t.name}: partial_countries count={len(t.partial_countries or [])}", flush=True)
+        for p in (t.partial_countries or []):
+            p_dict = p.model_dump() if hasattr(p, "model_dump") else p
+            print(f"    * Partial country: {p_dict.get('country')}, clip_desc='{p_dict.get('clip_description')}', split_provs={[sp.get('name') if isinstance(sp, dict) else getattr(sp, 'name', '') for sp in p_dict.get('split_provinces', [])]}", flush=True)
+
     # Partition Guardrails: Clear countries_absorbed and enforce natural boundary partitioning
     scenario_lower = scenario.lower()
     for t in res.territories:
@@ -72,6 +79,7 @@ def run_partition_sim(scenario: str, year: int, state: Dict[str, Any]) -> Dict[s
                         status="direct_control"
                     )
                 ]
+                print(f"[PARTITION-DEBUG] Guardrail applied for Pakistan: 2 partial regions set (Chenab River, north_of_natural_boundary).", flush=True)
             elif "india" in t_name:
                 t.partial_countries = [
                     PartialRegion(
@@ -97,8 +105,11 @@ def run_partition_sim(scenario: str, year: int, state: Dict[str, Any]) -> Dict[s
                         status="direct_control"
                     )
                 ]
+                print(f"[PARTITION-DEBUG] Guardrail applied for India: 2 partial regions set (Chenab River, south_of_natural_boundary).", flush=True)
 
+    print("[PARTITION-DEBUG] Calling process_territory_definitions...", flush=True)
     realistic_features = process_territory_definitions(res.territories, year, state)
+    print(f"[PARTITION-DEBUG] process_territory_definitions returned {len(realistic_features)} GeoJSON features.", flush=True)
     
     results = {
         "title": res.title,

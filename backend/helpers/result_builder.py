@@ -50,7 +50,10 @@ def build_common_results(
     results["historical_context"] = context.get("baseline_description", "")
     results["what_actually_happened"] = "Real timeline outcome."
     results["geojson_before"] = geojson_before
-    results["geojson_provinces"] = context.get("geojson_provinces", geojson_before)
+    if "geojson_provinces" in context and context["geojson_provinces"] and isinstance(context["geojson_provinces"], dict) and context["geojson_provinces"].get("features"):
+        results["geojson_provinces"] = context["geojson_provinces"]
+    else:
+        results["geojson_provinces"] = {"type": "FeatureCollection", "features": []}
     from backend.tools.baseline_resolver import _get_province_color
     results["territories_before"] = [
         {"name": p, "status": "baseline", "color": _get_province_color(p, p), "description": f"Baseline polity: {p}"}

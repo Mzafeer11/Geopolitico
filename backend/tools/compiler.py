@@ -73,7 +73,27 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=
             
         if boundary_geom.buffer(0.5).intersects(prov_geom):
             try:
-                split_result = split(prov_geom, boundary_geom)
+                # Extend line endpoints past province bounding box so split() cuts completely across polygon
+                ext_b_geom = boundary_geom
+                if boundary_geom.geom_type in ["LineString", "MultiLineString"]:
+                    diag = ((maxx - minx)**2 + (maxy - miny)**2)**0.5 + 2.0
+                    lines_to_ext = [boundary_geom] if boundary_geom.geom_type == "LineString" else list(boundary_geom.geoms)
+                    ext_lines = []
+                    for ls in lines_to_ext:
+                        coords = list(ls.coords)
+                        if len(coords) >= 2:
+                            dx0, dy0 = coords[0][0] - coords[1][0], coords[0][1] - coords[1][1]
+                            len0 = (dx0**2 + dy0**2)**0.5 or 1.0
+                            new_start = (coords[0][0] + (dx0/len0)*diag, coords[0][1] + (dy0/len0)*diag)
+                            print("I was here")
+                            dx1, dy1 = coords[-1][0] - coords[-2][0], coords[-1][1] - coords[-2][1]
+                            len1 = (dx1**2 + dy1**2)**0.5 or 1.0
+                            new_end = (coords[-1][0] + (dx1/len1)*diag, coords[-1][1] + (dy1/len1)*diag)
+                            ext_lines.append(LineString([new_start] + coords + [new_end]))
+                    if ext_lines:
+                        ext_b_geom = ext_lines[0] if len(ext_lines) == 1 else unary_union(ext_lines)
+
+                split_result = split(prov_geom, ext_b_geom)
                 if hasattr(split_result, "geoms") and len(split_result.geoms) > 1:
                     keep_polys = []
                     for sub_poly in split_result.geoms:
@@ -93,9 +113,13 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=
                             keep_polys.append(sub_poly)
                             
                     if keep_polys:
-                        return unary_union(keep_polys)
-            except Exception:
-                pass
+                        res_sh = unary_union(keep_polys)
+                        print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': split() succeeded! Kept {len(keep_polys)} sub-polys (dir={direction}, area={res_sh.area:.4f}, bounds={res_sh.bounds})", flush=True)
+                        return res_sh
+                    else:
+                        print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': split() succeeded but zero sub-polys matched direction '{direction}'.", flush=True)
+            except Exception as e:
+                print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': split() exception: {e}", flush=True)
                 
         try:
             p1, p2 = nearest_points(prov_geom.centroid, boundary_geom)
@@ -115,11 +139,66 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=
                 keep = True
                 
             if keep:
+                print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': centroid fallback KEPT whole province (dir={direction}, area={prov_geom.area:.4f})", flush=True)
                 return prov_geom
+            else:
+                print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': centroid fallback DISCARDED province (dir={direction})", flush=True)
         except Exception:
             pass
             
     return None
+
+
+def _resolve_boundary_geometry(p: Any, context: Optional[Dict[str, Any]], prov_geom: Optional[Any] = None) -> Optional[Any]:
+    """
+    Robust natural boundary geometry resolver.
+    Handles empty clip_description or clip_method="provinces" by checking context['osm_boundaries'] for intersecting rivers/lines.
+    """
+    b_geom = None
+    b_name = getattr(p, "clip_description", "") or ""
+    
+    if context and "osm_boundaries" in context:
+        osm_bounds = context["osm_boundaries"]
+        # 1a. Try exact or substring match in osm_boundaries
+        if b_name:
+            matched_k = next((k for k in osm_bounds if k.lower() in b_name.lower() or b_name.lower() in k.lower()), None)
+            if matched_k:
+                paths = osm_bounds[matched_k]
+                lines = [LineString(pt_list) for pt_list in paths if len(pt_list) >= 2]
+                if lines:
+                    b_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
+                    
+        # 1b. Spatial fallback: if b_name is empty or unmatched, find any loaded boundary intersecting prov_geom
+        if not b_geom and prov_geom and not prov_geom.is_empty:
+            for k, paths in osm_bounds.items():
+                lines = [LineString(pt_list) for pt_list in paths if len(pt_list) >= 2]
+                if lines:
+                    cand_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
+                    if cand_geom.buffer(0.5).intersects(prov_geom):
+                        b_geom = cand_geom
+                        break
+
+        # 1c. Direct fallback: if only 1 boundary is pre-loaded in context, use it
+        if not b_geom and len(osm_bounds) == 1:
+            only_paths = list(osm_bounds.values())[0]
+            lines = [LineString(pt_list) for pt_list in only_paths if len(pt_list) >= 2]
+            if lines:
+                b_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
+
+    # 2. Fallback to GIS tool lookup with keyword cleaning
+    if not b_geom and b_name:
+        try:
+            from backend.tools.gis_tools import get_natural_boundary_geometry
+            clean_b = b_name.split(";")[0].split("-")[0].strip()
+            for kw in ["chenab", "loire", "pyrenees", "pyrénées", "rhine", "danube", "bosphorus"]:
+                if kw in b_name.lower():
+                    clean_b = (kw.capitalize() + " River") if kw in ["chenab", "loire", "rhine", "danube"] else kw.capitalize()
+                    break
+            b_geom, _ = get_natural_boundary_geometry(clean_b)
+        except Exception:
+            pass
+
+    return b_geom
 
 
 def process_territory_definitions(territories: List[TerritoryChange], year: int, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -148,7 +227,12 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
             p = PartialRegion(**p_raw) if isinstance(p_raw, dict) else p_raw
             for sp in (p.split_provinces or []):
                 sp_name = sp.get("name") if isinstance(sp, dict) else getattr(sp, "name", "")
-                split_instructions[(t.name, sp_name)] = sp
+                if sp_name:
+                    split_instructions[(t.name, sp_name)] = sp
+                    split_instructions[(t.name, sp_name.lower())] = sp
+                    clean_sp = sp_name.split("(")[0].strip()
+                    split_instructions[(t.name, clean_sp)] = sp
+                    split_instructions[(t.name, clean_sp.lower())] = sp
                 
     polity_additions_shapes = {t.name: [] for t in territories}
     
@@ -170,18 +254,19 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
         from backend.tools.baseline_resolver import get_historical_units
         baseline_pols = context.get("baseline_polities", []) if context else []
         
-        for f_feat in loader.provinces_data:
-            p_name = (f_feat.get("properties", {}).get("name") or "").lower()
-            if p_name and len(p_name) > 3 and re.search(r'\b' + re.escape(p_name) + r'\b', scen_text):
-                for bp in baseline_pols:
-                    res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
-                    for sub_p in res_hist.get("provinces_core", []) + res_hist.get("provinces_edge", []):
-                        if p_name in sub_p.get("name", "").lower():
-                            target_u = sub_p.get("assigned_unit")
-                            if target_u and target_u not in getattr(t, "historical_provinces", []):
-                                if not hasattr(t, "historical_provinces") or t.historical_provinces is None:
-                                    t.historical_provinces = []
-                                t.historical_provinces.append(target_u)
+        if is_conquest:
+            for f_feat in loader.provinces_data:
+                p_name = (f_feat.get("properties", {}).get("name") or "").lower()
+                if p_name and len(p_name) > 3 and re.search(r'\b' + re.escape(p_name) + r'\b', scen_text):
+                    for bp in baseline_pols:
+                        res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
+                        for sub_p in res_hist.get("provinces_core", []) + res_hist.get("provinces_edge", []):
+                            if p_name in sub_p.get("name", "").lower():
+                                target_u = sub_p.get("assigned_unit")
+                                if target_u and target_u not in getattr(t, "historical_provinces", []):
+                                    if not hasattr(t, "historical_provinces") or t.historical_provinces is None:
+                                        t.historical_provinces = []
+                                    t.historical_provinces.append(target_u)
 
         if getattr(t, "historical_provinces", []):
             winner_base_sh = None
@@ -213,13 +298,13 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 h_map_all.update(res_hist.get("historical_units_map", {}))
 
             # Filter out conqueror baseline territories that were already part of the conqueror's baseline empire
-            if is_winner and winner_polity:
+            if is_conquest and is_winner and winner_polity:
                 base_units_dict = get_historical_units(winner_polity, year)
                 winner_owned_units = set(base_units_dict.get("historical_units_map", {}).keys())
                 if getattr(t, "historical_provinces", []):
                     t.historical_provinces = [hp for hp in t.historical_provinces if hp not in winner_owned_units and hp.lower() not in ["ifriqiya", "central maghreb"]]
 
-            if winner_base_sh and not winner_base_sh.is_empty:
+            if is_conquest and winner_base_sh and not winner_base_sh.is_empty:
                 target_polities = [bp for bp in baseline_pols if winner_polity and bp.lower() != winner_polity.lower()]
                 candidate_units_shapes = {}
                 for tp in target_polities:
@@ -335,14 +420,15 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                             except Exception:
                                 pass
 
-            t.countries_absorbed = []
-            t.partial_countries = []
+            if is_conquest:
+                t.countries_absorbed = []
+                t.partial_countries = []
 
         expanded_partials = []
         for p_raw in (t.partial_countries or []):
             p = PartialRegion(**p_raw) if isinstance(p_raw, dict) else p_raw
             expanded_partials.append(p)
-            if p.clip_method == "natural_boundary" and p.clip_description:
+            if mode != "proposal_partition" and p.clip_method == "natural_boundary" and p.clip_description:
                 matched_countries = get_countries_for_natural_boundary(p.clip_description, loader)
                 
                 existing_countries = [
@@ -393,19 +479,40 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 
                 for hp_name in p.historical_provinces:
                     hp_found = False
+                    clean_hp = hp_name.split("(")[0].strip()
+                    sp_key = (t.name, hp_name)
+                    sp_inst = split_instructions.get(sp_key) or split_instructions.get((t.name, hp_name.lower())) or split_instructions.get((t.name, clean_hp)) or split_instructions.get((t.name, clean_hp.lower()))
+                    
                     for h_key, geom in h_map.items():
-                        if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
+                        if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower() or clean_hp.lower() in h_key.lower():
                             if geom and not geom.is_empty:
-                                polity_additions_shapes[t.name].append(geom)
+                                if sp_inst and (sp_inst.is_split if hasattr(sp_inst, "is_split") else sp_inst.get("is_split", False)):
+                                    sp_dir = sp_inst.split_direction if hasattr(sp_inst, "split_direction") else sp_inst.get("split_direction")
+                                    sp_val = sp_inst.split_value if hasattr(sp_inst, "split_value") else sp_inst.get("split_value")
+                                    b_geom = _resolve_boundary_geometry(p, context, geom)
+                                    clipped = clip_province_geom(geom, b_geom, sp_dir, sp_val, prov_name=hp_name, territory_desc=t.description)
+                                    if clipped and not clipped.is_empty:
+                                        polity_additions_shapes[t.name].append(clipped)
+                                else:
+                                    polity_additions_shapes[t.name].append(geom)
                                 hp_found = True
                                 break
                     if not hp_found:
-                        matched_feats = loader.get_province_features(hp_name, country_name)
+                        matched_feats = loader.get_province_features(hp_name, country_name) or loader.get_province_features(clean_hp, country_name)
                         for feat_data in matched_feats:
                             g = feat_data.get("geometry")
                             if g:
                                 try:
-                                    polity_additions_shapes[t.name].append(shape(g))
+                                    prov_sh = shape(g)
+                                    if sp_inst and (sp_inst.is_split if hasattr(sp_inst, "is_split") else sp_inst.get("is_split", False)):
+                                        sp_dir = sp_inst.split_direction if hasattr(sp_inst, "split_direction") else sp_inst.get("split_direction")
+                                        sp_val = sp_inst.split_value if hasattr(sp_inst, "split_value") else sp_inst.get("split_value")
+                                        b_geom = _resolve_boundary_geometry(p, context, prov_sh)
+                                        clipped = clip_province_geom(prov_sh, b_geom, sp_dir, sp_val, prov_name=hp_name, territory_desc=t.description)
+                                        if clipped and not clipped.is_empty:
+                                            polity_additions_shapes[t.name].append(clipped)
+                                    else:
+                                        polity_additions_shapes[t.name].append(prov_sh)
                                 except Exception:
                                     pass
                 continue
@@ -431,15 +538,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                             sp_val = None
                             
                         if sp_split:
-                            b_geom = None
-                            if p.clip_method == "natural_boundary" and p.clip_description:
-                                b_name = p.clip_description
-                                if "osm_boundaries" in context and b_name in context["osm_boundaries"]:
-                                    paths = context["osm_boundaries"][b_name]
-                                    lines = [LineString(pt_list) for pt_list in paths if len(pt_list) >= 2]
-                                    if lines:
-                                        b_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
-                            
+                            b_geom = _resolve_boundary_geometry(p, context, prov_sh)
                             clipped = clip_province_geom(
                                 prov_sh, b_geom, sp_dir, sp_val,
                                 prov_name=prov_name, territory_desc=t.description
@@ -451,22 +550,12 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                     except Exception as e:
                         print(f"[WARN] Error parsing shape for province '{prov_name}': {e}")
                         
-            if p.clip_method in ["natural_boundary", "coordinate_latitude", "coordinate_longitude"] and not p.provinces and not getattr(p, "historical_provinces", []):
+            if mode != "proposal_partition" and p.clip_method in ["natural_boundary", "coordinate_latitude", "coordinate_longitude"] and not p.provinces and not getattr(p, "historical_provinces", []):
                 country_feat = loader.get_country_feature(country_name)
                 if country_feat:
                     c_provinces = [f for f in loader.provinces_data if f.get("properties", {}).get("admin", "").lower() == country_name.lower()]
                     
-                    b_geom = None
-                    if p.clip_method == "natural_boundary" and p.clip_description:
-                        b_name = p.clip_description
-                        if context and "osm_boundaries" in context and b_name in context["osm_boundaries"]:
-                            paths = context["osm_boundaries"][b_name]
-                            lines = [LineString(pt_list) for pt_list in paths if len(pt_list) >= 2]
-                            if lines:
-                                b_geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
-                        if not b_geom:
-                            from backend.tools.gis_tools import get_natural_boundary_geometry
-                            b_geom, _ = get_natural_boundary_geometry(b_name)
+                    b_geom = _resolve_boundary_geometry(p, context, shape(country_feat["geometry"]) if country_feat.get("geometry") else None)
                                 
                     if not c_provinces:
                         try:
@@ -607,20 +696,29 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
 
     # Mutual subtraction for partition mode
     if mode == "proposal_partition":
+        print(f"[PARTITION-DEBUG] Running mutual subtraction for {len(resolved_territories)} territories...", flush=True)
         for i, item_i in enumerate(resolved_territories):
+            t_name = item_i["definition"].name
+            base_area = item_i["base_geom"].area if item_i["base_geom"] else 0
+            add_area = item_i["additions_geom"].area if item_i["additions_geom"] else 0
+            print(f"[PARTITION-DEBUG] Pre-subtraction for '{t_name}': Base Area={base_area:.4f}, Additions Area={add_area:.4f}", flush=True)
+
             final_sh = item_i["final_geom"]
             if not final_sh or final_sh.is_empty:
                 continue
             for j, item_j in enumerate(resolved_territories):
                 if i == j:
                     continue
+                other_name = item_j["definition"].name
                 other_add = item_j["additions_geom"]
                 if other_add and not other_add.is_empty:
                     try:
                         final_sh = final_sh.difference(other_add.buffer(0.001))
-                    except Exception:
-                        pass
+                        print(f"  [PARTITION-DEBUG] Subtracted '{other_name}' additions (area={other_add.area:.4f}) from '{t_name}' → New Area={final_sh.area:.4f}", flush=True)
+                    except Exception as e:
+                        print(f"  [PARTITION-DEBUG] Error subtracting '{other_name}' from '{t_name}': {e}", flush=True)
             item_i["final_geom"] = final_sh
+            print(f"[PARTITION-DEBUG] Final shape for '{t_name}': Area={final_sh.area:.4f}, Bounds={final_sh.bounds}", flush=True)
 
     # Filter out tiny disconnected island slivers for conquest mode (disabled in partition mode to preserve split border polygons)
     if mode == "proposal_partition":
