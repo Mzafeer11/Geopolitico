@@ -3,7 +3,8 @@ Graph node wrapper functions for Geopolitico LangGraph orchestrator.
 Each node is a thin wrapper calling underlying tools or pipelines.
 """
 
-from typing import Dict, Any, List
+import re
+from typing import Dict, Any, List, Tuple
 from langchain_core.messages import SystemMessage
 
 from backend.models.schemas import PlanningResult, SequentialScenarioPlan, ScenarioStateResult, PartialRegion, SplitProvince
@@ -19,10 +20,69 @@ from backend.pipelines.conquest import run_conquest_sim
 from backend.pipelines.compounding import run_compounding_stage1, run_compounding_stage2
 from backend.pipelines.partition import run_partition_sim
 from backend.pipelines.demographic import run_demographic_simulation
+from backend.job_tracker import update_job_stage, append_job_log
+
+
+def _detect_partition_boundary_name(scenario: str, target_region: str = "") -> Tuple[str, str]:
+    """
+    Dynamically extract the natural boundary name (river, mountain range, strait)
+    from a proposal_partition scenario prompt, preserving Chenab River for Kashmir scenarios.
+    """
+    scen_lower = (scenario or "").lower()
+    known_boundaries = [
+        ("rhine", "Rhine River"),
+        ("rhein", "Rhine River"),
+        ("chenab", "Chenab River"),
+        ("sutlej", "Sutlej River"),
+        ("indus", "Indus River"),
+        ("ravi", "Ravi River"),
+        ("jhelum", "Jhelum River"),
+        ("danube", "Danube River"),
+        ("oder", "Oder River"),
+        ("elbe", "Elbe River"),
+        ("loire", "Loire River"),
+        ("rhone", "Rhone River"),
+        ("rhône", "Rhone River"),
+        ("seine", "Seine River"),
+        ("ebro", "Ebro River"),
+        ("po river", "Po River"),
+        ("dnieper", "Dnieper River"),
+        ("dnipro", "Dnieper River"),
+        ("vistula", "Vistula River"),
+        ("volga", "Volga River"),
+        ("euphrates", "Euphrates River"),
+        ("tigris", "Tigris River"),
+        ("jordan river", "Jordan River"),
+        ("nile", "Nile River"),
+        ("mekong", "Mekong River"),
+        ("yangtze", "Yangtze River"),
+        ("rio grande", "Rio Grande"),
+        ("pyrenees", "Pyrenees"),
+        ("pyrénées", "Pyrenees"),
+        ("alps", "Alps"),
+        ("bosphorus", "Bosphorus"),
+    ]
+    for kw, canonical in known_boundaries:
+        if kw in scen_lower:
+            reg = "Kashmir" if canonical == "Chenab River" else (target_region or "")
+            return canonical, reg
+
+    if "kashmir" in scen_lower:
+        return "Chenab River", "Kashmir"
+
+    stopwords = {"the", "that", "this", "along", "across", "make", "accept", "into", "from", "with", "over", "near"}
+    for m in re.finditer(r"\b([A-Z][a-zA-Zéèêëàâäîïôöùûüç\-]+)\s+(River|Mountains|Strait|Canal)\b", scenario or ""):
+        cand = m.group(1)
+        if cand.lower() not in stopwords:
+            return f"{cand} {m.group(2)}", target_region or ""
+
+    return "Chenab River", "Kashmir"
 
 
 def guardrail_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 1: User prompt verification & refinement guardrail."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "guardrail", "Analyzing prompt and verifying historical context via LLM fallback chain...")
     original_scenario = state.get("scenario") or state.get("raw_scenario", "")
     refined = refine_user_prompt(original_scenario)
     if isinstance(refined, dict):
@@ -46,6 +106,8 @@ def guardrail_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 2: Scenario classification & structured planning node."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "planner", "Identifying base year, belligerents, and geopolitical simulation mode...")
     scenario = state["scenario"]
     template = _load_prompt_template("planning.txt")
     prompt = template.format(scenario=scenario) if template else f"Classify: {scenario}"
@@ -86,11 +148,15 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def demographic_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 3: Demographic shift simulation pipeline."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Computing demographic displacement and territorial shifts...")
     return run_demographic_simulation(state)
 
 
 def compound_splitter_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 4: Sequential compounding scenario plan parser."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "planner", "Parsing sequential multi-epoch compounding scenario...")
     scenario = state["scenario"]
     template = _load_prompt_template("sequential_compounding_plan.txt")
     prompt = template.format(scenario=scenario) if template else f"Split compounding: {scenario}"
@@ -109,6 +175,8 @@ def compound_splitter_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 5: Preprocess baseline geometries and contested provinces with spatial filtering."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "baseline_gis", "Loading Cliopatria historical shapes & offline GIS natural boundaries...")
     scenario = state["scenario"]
     year = state["year"]
     parties = state.get("parties", [])
@@ -124,21 +192,70 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan_dict = state.get("compounding_plan") or {}
         year = plan_dict.get("year_2", year)
         all_baseline_polities = list(dict.fromkeys(raw_baseline_polities))
+    elif simulation_mode in ("proposal_partition", "demographic_peaceful"):
+        all_baseline_polities = list(dict.fromkeys(raw_baseline_polities or parties))
     else:
         all_baseline_polities = filter_contiguous_baseline_polities(
             raw_baseline_polities, winner_polity, year, target_countries
         )
 
-    contested = find_contested_provinces(all_baseline_polities, year, target_countries, is_partition=(simulation_mode == "proposal_partition"))
+    gis_context = ""
+    osm_boundaries = {}
+    river_geom = None
+
+    if simulation_mode == "proposal_partition":
+        try:
+            from backend.tools.gis_tools import get_natural_boundary_geometry
+            b_name, b_region = _detect_partition_boundary_name(scenario, target_region)
+            river_geom, river_paths = get_natural_boundary_geometry(b_name, b_region)
+            if river_paths:
+                osm_boundaries[b_name] = river_paths
+                reg_label = f" ({b_region})" if b_region else ""
+                gis_context = f"\nNATURAL BOUNDARY GEOMETRY LOADED: {b_name}{reg_label} with {len(river_paths)} vector segments."
+        except Exception as e:
+            print(f"[WARN] Failed to load GIS boundary geometry: {e}", flush=True)
+
+    contested = find_contested_provinces(
+        all_baseline_polities,
+        year,
+        target_countries,
+        is_partition=(simulation_mode == "proposal_partition"),
+        boundary_geom=river_geom
+    )
     prompt_contested = ", ".join(contested[:12]) if contested else "regional borders"
+
+    # Derive conflict anchor from target countries / theater
+    anchor_lat, anchor_lon = None, None
+    if target_countries:
+        try:
+            from shapely.geometry import shape
+            from shapely.ops import unary_union
+            from backend.tools.country_polygons import get_country_polygon_loader
+            loader = get_country_polygon_loader()
+            target_geoms = []
+            for c_name in target_countries:
+                c_feat = loader.get_country_feature(c_name)
+                if c_feat and c_feat.get("geometry"):
+                    target_geoms.append(shape(c_feat["geometry"]))
+            if target_geoms:
+                tc_c = unary_union(target_geoms).centroid
+                anchor_lat, anchor_lon = tc_c.y, tc_c.x
+        except Exception:
+            pass
 
     features_before_coarse = []
     features_provinces = []
     units_ownership_map = {}
 
     for bp in all_baseline_polities:
-        sh, feat_dict, tier = _get_resolved_baseline_geometry(bp, year, target_region)
-        base_color = _get_province_color(bp, bp)
+        sh, feat_dict, tier = _get_resolved_baseline_geometry(
+            bp, year, target_region,
+            anchor_lat=anchor_lat,
+            anchor_lon=anchor_lon,
+            winner_polity=winner_polity
+        )
+        display_name = feat_dict.get("properties", {}).get("canonical_name", bp) if feat_dict else bp
+        base_color = _get_province_color(display_name, bp)
 
         if sh is not None and not sh.is_empty:
             from shapely.geometry import mapping
@@ -147,7 +264,9 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "type": "Feature",
                 "geometry": geom_map,
                 "properties": {
-                    "Name": bp, "name": bp,
+                    "Name": display_name, "name": display_name,
+                    "canonical_name": display_name,
+                    "original_polity": bp,
                     "FromYear": year, "ToYear": year, "year": year,
                     "tier": tier,
                     "is_outer_border": True,
@@ -157,7 +276,14 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
             features_before_coarse.append(coarse_feat)
 
             # Direct sub-province feature resolution (read from SimulationCache or resolve once)
-            res = get_historical_units(bp, year, target_region)
+            res = get_historical_units(
+                bp,
+                year,
+                target_region,
+                anchor_lat=anchor_lat,
+                anchor_lon=anchor_lon,
+                winner_polity=winner_polity
+            )
             core_provs = res.get("provinces_core", [])
             edge_provs = res.get("provinces_edge", [])
             units_ownership_map[bp] = list(res.get("historical_units_map", {}).keys())
@@ -203,21 +329,9 @@ def shared_preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "features": features_provinces
     }
 
-    gis_context = ""
-    osm_boundaries = {}
-
-    if simulation_mode == "proposal_partition":
-        try:
-            from backend.tools.gis_tools import get_natural_boundary_geometry
-            river_geom, river_paths = get_natural_boundary_geometry("Chenab River", "Kashmir")
-            if river_paths:
-                osm_boundaries["Chenab River"] = river_paths
-                gis_context = f"\nNATURAL BOUNDARY GEOMETRY LOADED: Chenab River (Kashmir) with {len(river_paths)} vector segments."
-        except Exception as e:
-            print(f"[WARN] Failed to load GIS boundary geometry: {e}", flush=True)
-
     return {
         "all_baseline_polities": all_baseline_polities,
+        "baseline_polities": all_baseline_polities,
         "contested_provinces": contested,
         "prompt_contested": prompt_contested,
         "geojson_before": geojson_before,
@@ -240,6 +354,8 @@ def ownership_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def partition_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 8: Treaty partition simulation pipeline wrapper."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Executing treaty partition corridor discovery & territorial assignments...")
     scenario = state["scenario"]
     year = state["year"]
     return run_partition_sim(scenario, year, state)
@@ -247,6 +363,8 @@ def partition_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def conquest_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 7: Military expansion conquest pipeline execution."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Executing military conquest simulation across contested provinces...")
     scenario = state["scenario"]
     year = state["year"]
     answers = state.get("user_selections")
@@ -257,30 +375,41 @@ def conquest_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "res_real": res_real.model_dump(),
         "res_opt": res_opt.model_dump(),
         "realistic_features": realistic_features,
-        "optimistic_features": optimistic_features
+        "optimistic_features": optimistic_features,
+        "optimistic_retry_count": state.get("optimistic_retry_count", 0)
     }
 
 
 def conquest_stage1_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 9: Sequential compounding Stage 1 execution."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Simulating compounding conquests Stage 1...")
     return run_compounding_stage1(state)
 
 
 def conquest_stage2_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 10: Sequential compounding Stage 2 execution."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Simulating compounding conquests Stage 2...")
     return run_compounding_stage2(state)
 
 
 def conquest_retry_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 11: Optimistic scenario retry loop."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "simulation", "Retrying optimistic expansion calibration...")
     retries = state.get("optimistic_retry_count", 0) + 1
     state["optimistic_retry_count"] = retries
     print(f"[SIMULATOR-GRAPH] Triggering optimistic expansion retry attempt {retries}...", flush=True)
-    return conquest_node(state)
+    res = conquest_node(state)
+    res["optimistic_retry_count"] = retries
+    return res
 
 
 def result_assembly_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 13: Response payload compiler."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "compilation", "Compiling cartographic GeoJSON features, metrics, and timeline narrative...")
     all_baseline_polities = state.get("all_baseline_polities") or state.get("baseline_polities", state.get("parties", []))
     
     if "results" in state and state["results"]:
@@ -321,6 +450,8 @@ def result_assembly_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def anomaly_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Node 14: Geopolitical anomaly & enclave inspector."""
+    job_id = state.get("job_id")
+    update_job_stage(job_id, "audit", "Checking territorial continuity & detecting geopolitical anomalies...")
     if state.get("simulation_mode") != "expansion_conquest":
         return {"status": "completed", "anomalies": []}
         

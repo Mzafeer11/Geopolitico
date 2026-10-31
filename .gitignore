@@ -3,7 +3,6 @@
 .env.*
 simulation.log
 
-
 # Python Cache
 __pycache__/
 *.pyc
@@ -19,21 +18,17 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Project Scratch Directories
+# Project Scratch & Legacy Directories
 scratch/
-test_*.py
 *.log
 *.pdf
-Census 1941/
+Census 1941/*.xlsx
+Census 1941/census_data.csv
 Indian Data/
 Pakistan Districts/
 
-custom_regional_painted_divisions.json
-gadm41_IND_1.json/
-gadm41_IND_3.json/
-gadm41_PAK_3.json/
-table_11_balochistan_all.csv
-
-# Large Data & Cache Files
-data/*.geojson
+# Temporary / Raw Cache
+data/hgis_datasets/
+data/whg_cache/
 data/blacklisted_models.json
+data/cliopatria_polities.geojson

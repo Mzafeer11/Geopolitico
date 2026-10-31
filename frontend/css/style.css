@@ -254,20 +254,206 @@ body, html {
     padding: 16px;
     border-radius: 8px;
     width: 100%;
-    max-width: 320px;
+}
+
+.stage-badge-container {
+    margin-bottom: 8px;
+}
+
+.stage-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: rgba(212, 168, 83, 0.16);
+    color: var(--accent-gold);
+    border: 1px solid rgba(212, 168, 83, 0.35);
+    border-radius: 12px;
 }
 
 .current-agent {
-    font-size: 0.85rem;
+    font-size: 0.95rem;
     font-weight: 600;
-    color: var(--accent-emerald);
+    color: #ffffff;
     margin-bottom: 6px;
 }
 
 .progress-details {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     color: var(--text-muted);
+    line-height: 1.4;
 }
+
+/* Pipeline Stages Checklist */
+.pipeline-stages-container {
+    width: 100%;
+    margin-top: 14px;
+    background: rgba(10, 15, 29, 0.65);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: left;
+}
+
+.pipeline-stages-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent-gold);
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.stages-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.stage-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: all 0.25s ease;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.stage-item.stage-completed {
+    color: #a7f3d0;
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.stage-item.stage-active {
+    color: #ffffff;
+    background: rgba(212, 168, 83, 0.15);
+    border-left: 3px solid var(--accent-gold);
+    box-shadow: 0 0 12px rgba(212, 168, 83, 0.12);
+}
+
+.stage-item.stage-pending {
+    opacity: 0.45;
+}
+
+.stage-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    font-size: 0.65rem;
+    font-weight: bold;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.stage-completed .stage-status-icon {
+    background: #059669;
+    color: #ffffff;
+}
+
+.stage-active .stage-status-icon {
+    background: var(--accent-gold);
+    color: #0a0f1d;
+    box-shadow: 0 0 8px rgba(212, 168, 83, 0.6);
+}
+
+.stage-pending .stage-status-icon {
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: transparent;
+}
+
+.stage-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.stage-name {
+    font-weight: 600;
+    font-size: 0.78rem;
+}
+
+.stage-desc {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stage-active .stage-desc {
+    color: #cbd5e1;
+}
+
+/* Live Engine Log Terminal Console */
+.live-log-box {
+    width: 100%;
+    margin-top: 14px;
+    background: rgba(5, 7, 15, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+    text-align: left;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.live-log-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.terminal-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.terminal-dot.red { background: #ef4444; }
+.terminal-dot.yellow { background: #f59e0b; }
+.terminal-dot.green { background: #10b981; }
+
+.live-log-title {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-left: 4px;
+}
+
+.live-log-content {
+    padding: 8px 10px;
+    max-height: 95px;
+    overflow-y: auto;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.log-line {
+    word-break: break-all;
+}
+
+.log-line.log-system { color: #38bdf8; }
+.log-line.log-stage { color: #fbbf24; font-weight: 600; }
+.log-line.log-gis { color: #34d399; }
+.log-line.log-err { color: #f87171; }
 
 /* Results Interface Panel */
 #result-title {

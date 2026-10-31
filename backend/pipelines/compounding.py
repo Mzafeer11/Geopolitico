@@ -53,10 +53,37 @@ def run_compounding_conquest(
     winner_sh_732, _, _ = _get_resolved_baseline_geometry(winner_name, year_2, context.get("target_region", ""))
     if winner_sh_732 and not winner_sh_732.is_empty:
         for r_dict in [resolved_real_1, resolved_opt_1]:
-            if winner_name in r_dict and r_dict[winner_name] is not None:
-                r_dict[winner_name] = winner_sh_732.union(r_dict[winner_name])
+            existing_geom = None
+            matched_keys = []
+            for k, v in list(r_dict.items()):
+                if (winner_name.lower() in k.lower() or k.lower() in winner_name.lower() or "umayyad" in k.lower()) and v is not None:
+                    matched_keys.append(k)
+                    existing_geom = v if existing_geom is None else existing_geom.union(v)
+            if existing_geom is not None:
+                merged_732 = winner_sh_732.union(existing_geom)
             else:
-                r_dict[winner_name] = winner_sh_732
+                merged_732 = winner_sh_732
+            r_dict[winner_name] = merged_732
+            for mk in matched_keys:
+                r_dict[mk] = merged_732
+            if "umayyad" in winner_name.lower():
+                r_dict["Umayyad"] = merged_732
+                r_dict["Umayyad Caliphate"] = merged_732
+
+    # Accumulate Stage 1 conquered historical provinces so Stage 2 retains all Stage 1 conquests
+    stage1_real_provs = []
+    for t1_r in res_real_1.territories:
+        if winner_name.lower() in t1_r.name.lower() or t1_r.name.lower() in winner_name.lower() or "umayyad" in t1_r.name.lower():
+            for hp in (getattr(t1_r, "historical_provinces", []) or []):
+                if hp not in stage1_real_provs:
+                    stage1_real_provs.append(hp)
+
+    stage1_opt_provs = []
+    for t1_o in res_opt_1.territories:
+        if winner_name.lower() in t1_o.name.lower() or t1_o.name.lower() in winner_name.lower() or "umayyad" in t1_o.name.lower():
+            for hp in (getattr(t1_o, "historical_provinces", []) or []):
+                if hp not in stage1_opt_provs:
+                    stage1_opt_provs.append(hp)
 
     real_conquests_str_1 = build_conquest_summary_str(res_real_1.territories)
     opt_conquests_str_1 = build_conquest_summary_str(res_opt_1.territories)
@@ -81,10 +108,24 @@ def run_compounding_conquest(
         answers=answers
     )
     
-    # Synchronize conqueror territory names for Stage 2
-    for t in res_real_2.territories + res_opt_2.territories:
-        if winner_name.lower() in t.name.lower() or "umayyad" in t.name.lower():
+    # Synchronize conqueror territory names for Stage 2 and union Stage 1 + Stage 2 conquered historical_provinces
+    for t in res_real_2.territories:
+        if winner_name.lower() in t.name.lower() or t.name.lower() in winner_name.lower() or "umayyad" in t.name.lower():
             t.name = winner_name
+            combined_r = list(stage1_real_provs)
+            for hp in (getattr(t, "historical_provinces", []) or []):
+                if hp not in combined_r:
+                    combined_r.append(hp)
+            t.historical_provinces = combined_r
+
+    for t in res_opt_2.territories:
+        if winner_name.lower() in t.name.lower() or t.name.lower() in winner_name.lower() or "umayyad" in t.name.lower():
+            t.name = winner_name
+            combined_o = list(stage1_opt_provs)
+            for hp in (getattr(t, "historical_provinces", []) or []):
+                if hp not in combined_o:
+                    combined_o.append(hp)
+            t.historical_provinces = combined_o
 
     compounding_results = {}
     compounding_results["title"] = f"{res_real_1.title} & {res_real_2.title}"

@@ -1,7 +1,11 @@
 import httpx
 import time
 from typing import Tuple, Optional, Type
-from crewai.tools import BaseTool
+try:
+    from crewai.tools import BaseTool
+except Exception:
+    class BaseTool:
+        pass
 from pydantic import BaseModel, Field
 
 # Simple rate limiter state

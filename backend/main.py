@@ -17,6 +17,17 @@ class Tee(object):
         self.stdout.write(data)
         self.stdout.flush()
 
+        # Stream meaningful log lines into the active job tracker
+        if data and ("[" in data):
+            try:
+                from backend.job_tracker import append_job_log
+                for line in data.splitlines():
+                    s = line.strip()
+                    if s.startswith("[") and not s.startswith("[DEBUG]"):
+                        append_job_log(None, s)
+            except Exception:
+                pass
+
     def flush(self):
         try:
             self.file.flush()
@@ -59,6 +70,9 @@ from pydantic import BaseModel
 
 from backend.simulation_engine import simulate_start, simulate_step, simulate_verify
 from backend.config import FRONTEND_DIR, DATA_DIR
+from backend.job_tracker import (
+    jobs_store, init_job, update_job_stage, append_job_log, complete_job, fail_job
+)
 
 app = FastAPI(
     title="Geopolitico — Unified Alternate History Geopolitical Simulator",
@@ -74,9 +88,6 @@ app.add_middleware(
     allow_headers=["*"],
     allow_methods=["*"],
 )
-
-# In-memory store for active job states/results
-jobs_store = {}
 
 class SimulationRequest(BaseModel):
     scenario: str
@@ -95,62 +106,33 @@ class InteractiveRequest(BaseModel):
 def run_simulate_start_background(job_id: str, scenario: str):
     """Start the simulation pipeline in the background."""
     try:
-        jobs_store[job_id] = {
-            "status": "running",
-            "progress": "Analyzing geopolitical counterfactual context..."
-        }
-        res = simulate_start(scenario)
+        init_job(job_id, scenario)
+        res = simulate_start(scenario, job_id=job_id)
         sess_id = res.get("session_id") or (res.get("result", {}).get("session_id") if isinstance(res.get("result"), dict) else None)
         payload = res.get("result", res)
         if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], dict) and "title" in payload["result"]:
             payload = payload["result"]
             
         if res.get("status") == "awaiting_verification":
-            jobs_store[job_id] = {
-                "status": "awaiting_verification",
-                "progress": "Awaiting user verification of geopolitical anomalies",
-                "questions": res.get("questions", []),
-                "result": payload,
-                "session_id": sess_id
-            }
+            complete_job(job_id, payload, sess_id, is_awaiting_verification=True, questions=res.get("questions", []))
         else:
-            jobs_store[job_id] = {
-                "status": "completed",
-                "progress": "Simulation complete",
-                "result": payload,
-                "session_id": sess_id
-            }
+            complete_job(job_id, payload, sess_id, is_awaiting_verification=False)
     except Exception as e:
         trace = traceback.format_exc()
         print(f"[ERR] Start simulation failed for job {job_id}: {e}\n{trace}")
-        jobs_store[job_id] = {
-            "status": "failed",
-            "progress": f"Error: {str(e)}",
-            "error": str(e)
-        }
+        fail_job(job_id, str(e))
 
 def run_simulate_verify_background(job_id: str, session_id: str, selections: Dict[str, str]):
     """Finalize the simulation in the background with user validation selections."""
     try:
-        jobs_store[job_id] = {
-            "status": "running",
-            "progress": "Finalizing boundaries with selected validation edits..."
-        }
+        init_job(job_id, "Applying validation choices")
+        update_job_stage(job_id, "audit", "Applying user validation selections and rebuilding territorial boundaries...")
         res = simulate_verify(session_id, selections)
-        jobs_store[job_id] = {
-            "status": "completed",
-            "progress": "Simulation complete",
-            "result": res["result"],
-            "session_id": res["session_id"]
-        }
+        complete_job(job_id, res["result"], res["session_id"])
     except Exception as e:
         trace = traceback.format_exc()
         print(f"[ERR] Verify simulation failed for job {job_id}: {e}\n{trace}")
-        jobs_store[job_id] = {
-            "status": "failed",
-            "progress": f"Error: {str(e)}",
-            "error": str(e)
-        }
+        fail_job(job_id, str(e))
 
 def run_simulate_step_background(job_id: str, session_id: str, message: str):
     """Refine the simulation timeline in the background with user instructions."""

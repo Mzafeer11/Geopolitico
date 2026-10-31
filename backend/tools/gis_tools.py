@@ -289,12 +289,16 @@ def natural_boundary_tool(name: str) -> Dict[str, Any]:
 # ─── 3. Wikipedia Demographics Extraction Tool ────────────────────────────────
 
 
-
-
-def find_contested_provinces(polities: List[str], year: int, target_countries: Optional[List[str]] = None, is_partition: bool = False) -> List[str]:
+def find_contested_provinces(
+    polities: List[str],
+    year: int,
+    target_countries: Optional[List[str]] = None,
+    is_partition: bool = False,
+    boundary_geom: Optional[Any] = None
+) -> List[str]:
     """
     Find all modern provinces that overlap or border the baseline geometries 
-    of the primary conflict polities in the Cliopatria database.
+    of the primary conflict polities in the Cliopatria database (or intersect a partition boundary).
     """
     from backend.tools.spatial_cache import SimulationCache
     from backend.tools.country_polygons import get_country_polygon_loader
@@ -303,12 +307,14 @@ def find_contested_provinces(polities: List[str], year: int, target_countries: O
     
     cache_inst = SimulationCache.get_instance()
     tc_list = target_countries or []
-    cached = cache_inst.get_contested_provinces(polities, year, tc_list, is_partition)
-    if cached is not None:
-        return cached
+    if boundary_geom is None:
+        cached = cache_inst.get_contested_provinces(polities, year, tc_list, is_partition)
+        if cached is not None:
+            return cached
 
     loader = get_country_polygon_loader()
-    contested = set()
+    all_contested = set()
+    disputed_contested = set()
     
     disputed_geoms = []
     if is_partition:
@@ -331,7 +337,7 @@ def find_contested_provinces(polities: List[str], year: int, target_countries: O
             print(f"[RESOLVER] Baseline shape for '{polity}' ({year} AD) resolved via {tier}. Bounds: {sh.bounds}", flush=True)
             party_shapes.append(sh)
                 
-    if not party_shapes:
+    if not party_shapes and boundary_geom is None:
         return []
         
     for f in loader.provinces_data:
@@ -354,7 +360,6 @@ def find_contested_provinces(polities: List[str], year: int, target_countries: O
             prov_shape = shape(geom_dict)
             prov_bounds = prov_shape.bounds
             
-            bbox = box(*prov_bounds)
             intersect_count = 0
             is_contested = False
             for p_sh in party_shapes:
@@ -372,28 +377,34 @@ def find_contested_provinces(polities: List[str], year: int, target_countries: O
             if is_partition and len(party_shapes) >= 2:
                 if intersect_count >= 2:
                     is_contested = True
+
+            if is_partition and boundary_geom is not None:
+                try:
+                    if prov_shape.intersects(boundary_geom) or prov_shape.distance(boundary_geom) < 0.8:
+                        is_contested = True
+                except Exception:
+                    pass
             
-            if is_contested and is_partition and disputed_geoms:
-                intersects_disputed = False
-                for d_sh in disputed_geoms:
-                    try:
-                        if prov_shape.intersects(d_sh):
-                            intersects_disputed = True
-                            break
-                    except Exception:
-                        pass
-                if not intersects_disputed:
-                    is_contested = False
-                    
             if is_contested:
                 pname = props.get("name")
                 if pname and admin:
-                    contested.add(f"{pname} ({admin})")
+                    label = f"{pname} ({admin})"
+                    all_contested.add(label)
+                    if is_partition and disputed_geoms:
+                        for d_sh in disputed_geoms:
+                            try:
+                                if prov_shape.intersects(d_sh):
+                                    disputed_contested.add(label)
+                                    break
+                            except Exception:
+                                pass
         except Exception:
             pass
             
-    result_list = sorted(list(contested))
-    cache_inst.set_contested_provinces(polities, year, tc_list, is_partition, result_list)
+    chosen = disputed_contested if (is_partition and disputed_contested) else all_contested
+    result_list = sorted(list(chosen))
+    if boundary_geom is None:
+        cache_inst.set_contested_provinces(polities, year, tc_list, is_partition, result_list)
     return result_list
 
 

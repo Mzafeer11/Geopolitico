@@ -71,37 +71,50 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=
             except Exception:
                 pass
             
+        from shapely.ops import linemerge
+        merged_b = linemerge(boundary_geom) if boundary_geom.geom_type == "MultiLineString" else boundary_geom
+        b_minx, b_miny, b_maxx, b_maxy = merged_b.bounds
+
         if boundary_geom.buffer(0.5).intersects(prov_geom):
             try:
-                # Extend line endpoints past province bounding box so split() cuts completely across polygon
-                ext_b_geom = boundary_geom
-                if boundary_geom.geom_type in ["LineString", "MultiLineString"]:
-                    diag = ((maxx - minx)**2 + (maxy - miny)**2)**0.5 + 2.0
-                    lines_to_ext = [boundary_geom] if boundary_geom.geom_type == "LineString" else list(boundary_geom.geoms)
-                    ext_lines = []
-                    for ls in lines_to_ext:
-                        coords = list(ls.coords)
-                        if len(coords) >= 2:
-                            dx0, dy0 = coords[0][0] - coords[1][0], coords[0][1] - coords[1][1]
-                            len0 = (dx0**2 + dy0**2)**0.5 or 1.0
-                            new_start = (coords[0][0] + (dx0/len0)*diag, coords[0][1] + (dy0/len0)*diag)
-                            print("I was here")
-                            dx1, dy1 = coords[-1][0] - coords[-2][0], coords[-1][1] - coords[-2][1]
-                            len1 = (dx1**2 + dy1**2)**0.5 or 1.0
-                            new_end = (coords[-1][0] + (dx1/len1)*diag, coords[-1][1] + (dy1/len1)*diag)
-                            ext_lines.append(LineString([new_start] + coords + [new_end]))
-                    if ext_lines:
-                        ext_b_geom = ext_lines[0] if len(ext_lines) == 1 else unary_union(ext_lines)
+                # 1. Try splitting directly with merged river/boundary geometry first (avoids internal segment ray artifacts)
+                split_result = split(prov_geom, merged_b) if merged_b.intersects(prov_geom) else None
 
-                split_result = split(prov_geom, ext_b_geom)
+                # 2. If direct split did not divide the polygon (e.g. river starts/ends just inside province), extend endpoints
+                if not split_result or not hasattr(split_result, "geoms") or len(split_result.geoms) <= 1:
+                    ext_b_geom = merged_b
+                    if merged_b.geom_type in ["LineString", "MultiLineString"]:
+                        diag = ((maxx - minx)**2 + (maxy - miny)**2)**0.5 + 2.0
+                        lines_to_ext = [merged_b] if merged_b.geom_type == "LineString" else list(merged_b.geoms)
+                        ext_lines = []
+                        for ls in lines_to_ext:
+                            coords = list(ls.coords)
+                            if len(coords) >= 2:
+                                dx0, dy0 = coords[0][0] - coords[1][0], coords[0][1] - coords[1][1]
+                                len0 = (dx0**2 + dy0**2)**0.5 or 1.0
+                                new_start = (coords[0][0] + (dx0/len0)*diag, coords[0][1] + (dy0/len0)*diag)
+                                dx1, dy1 = coords[-1][0] - coords[-2][0], coords[-1][1] - coords[-2][1]
+                                len1 = (dx1**2 + dy1**2)**0.5 or 1.0
+                                new_end = (coords[-1][0] + (dx1/len1)*diag, coords[-1][1] + (dy1/len1)*diag)
+                                ext_lines.append(LineString([new_start] + coords + [new_end]))
+                        if ext_lines:
+                            ext_b_geom = ext_lines[0] if len(ext_lines) == 1 else unary_union(ext_lines)
+                    split_result = split(prov_geom, ext_b_geom)
+
                 if hasattr(split_result, "geoms") and len(split_result.geoms) > 1:
                     keep_polys = []
                     for sub_poly in split_result.geoms:
                         scy = sub_poly.centroid.y
                         scx = sub_poly.centroid.x
-                        p1, p2 = nearest_points(sub_poly.centroid, boundary_geom)
+                        p1, p2 = nearest_points(sub_poly.centroid, merged_b)
                         local_y = p2.y
                         local_x = p2.x
+
+                        if direction in ["west_of_natural_boundary", "east_of_natural_boundary"]:
+                            hline = LineString([(b_minx - 5.0, scy), (b_maxx + 5.0, scy)])
+                            inter = merged_b.intersection(hline)
+                            if inter and not inter.is_empty:
+                                local_x = inter.centroid.x
                         
                         if direction in ["north_of_natural_boundary", "north_of_latitude"] and scy > local_y:
                             keep_polys.append(sub_poly)
@@ -122,11 +135,17 @@ def clip_province_geom(prov_geom, boundary_geom, direction, val=None, prov_name=
                 print(f"  [PARTITION-DEBUG] clip_province_geom '{prov_name}': split() exception: {e}", flush=True)
                 
         try:
-            p1, p2 = nearest_points(prov_geom.centroid, boundary_geom)
+            p1, p2 = nearest_points(prov_geom.centroid, merged_b)
             local_y = p2.y
             local_x = p2.x
             scy = prov_geom.centroid.y
             scx = prov_geom.centroid.x
+
+            if direction in ["west_of_natural_boundary", "east_of_natural_boundary"]:
+                hline = LineString([(b_minx - 5.0, scy), (b_maxx + 5.0, scy)])
+                inter = merged_b.intersection(hline)
+                if inter and not inter.is_empty:
+                    local_x = inter.centroid.x
             
             keep = False
             if direction in ["north_of_natural_boundary", "north_of_latitude"] and scy > local_y:
@@ -178,8 +197,8 @@ def _resolve_boundary_geometry(p: Any, context: Optional[Dict[str, Any]], prov_g
                         b_geom = cand_geom
                         break
 
-        # 1c. Direct fallback: if only 1 boundary is pre-loaded in context, use it
-        if not b_geom and len(osm_bounds) == 1:
+        # 1c. Direct fallback: if b_name is empty and only 1 boundary is pre-loaded in context, use it
+        if not b_geom and not b_name and len(osm_bounds) == 1:
             only_paths = list(osm_bounds.values())[0]
             lines = [LineString(pt_list) for pt_list in only_paths if len(pt_list) >= 2]
             if lines:
@@ -190,15 +209,46 @@ def _resolve_boundary_geometry(p: Any, context: Optional[Dict[str, Any]], prov_g
         try:
             from backend.tools.gis_tools import get_natural_boundary_geometry
             clean_b = b_name.split(";")[0].split("-")[0].strip()
-            for kw in ["chenab", "loire", "pyrenees", "pyrénées", "rhine", "danube", "bosphorus"]:
+            river_kws = ["chenab", "loire", "rhine", "danube", "sutlej", "indus", "oder", "elbe", "dnieper", "dnipro", "euphrates", "tigris", "rhone", "rhône", "seine", "ebro"]
+            for kw in river_kws + ["pyrenees", "pyrénées", "bosphorus", "alps"]:
                 if kw in b_name.lower():
-                    clean_b = (kw.capitalize() + " River") if kw in ["chenab", "loire", "rhine", "danube"] else kw.capitalize()
+                    clean_b = (kw.capitalize() + " River") if kw in river_kws else kw.capitalize()
                     break
             b_geom, _ = get_natural_boundary_geometry(clean_b)
         except Exception:
             pass
 
     return b_geom
+
+
+def consolidate_enclave_dots(target_geom, max_hole_area: float = 0.5):
+    """
+    Fills interior holes and absorbs internal micro-enclaves within a territorial polygon.
+    Ensures that focal capitals and cities (e.g. Wien inside Lower Austria, Berlin in Brandenburg)
+    are solid and not left behind as unannexed holes or isolated dots.
+    """
+    if target_geom is None or target_geom.is_empty:
+        return target_geom
+    if target_geom.geom_type == 'Polygon':
+        if not target_geom.interiors:
+            return target_geom
+        valid_interiors = []
+        filled = []
+        for interior in target_geom.interiors:
+            hp = Polygon(interior)
+            if hp.area <= max_hole_area:
+                filled.append(hp)
+            else:
+                valid_interiors.append(interior)
+        new_p = Polygon(target_geom.exterior, valid_interiors)
+        return unary_union([new_p] + filled) if filled else new_p
+    elif target_geom.geom_type == 'MultiPolygon':
+        return MultiPolygon([consolidate_enclave_dots(p, max_hole_area) for p in target_geom.geoms])
+    elif target_geom.geom_type == 'GeometryCollection':
+        polys = [p for p in target_geom.geoms if p.geom_type in ('Polygon', 'MultiPolygon')]
+        if polys:
+            return unary_union([consolidate_enclave_dots(p, max_hole_area) for p in polys])
+    return target_geom
 
 
 def process_territory_definitions(territories: List[TerritoryChange], year: int, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -292,8 +342,15 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                     except Exception:
                         pass
 
+            expanded_bps = list(baseline_pols)
+            scen_txt = (context.get("scenario", "") if context else "").lower()
+            if any(k in scen_txt for k in ["vienna", "austria", "habsburg", "wien", "hungary"]):
+                for rel_pol in ["Archduchy of Austria", "Kingdom of Hungary"]:
+                    if rel_pol not in expanded_bps:
+                        expanded_bps.append(rel_pol)
+
             h_map_all = {}
-            for bp in baseline_pols:
+            for bp in expanded_bps:
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map_all.update(res_hist.get("historical_units_map", {}))
 
@@ -305,7 +362,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                     t.historical_provinces = [hp for hp in t.historical_provinces if hp not in winner_owned_units and hp.lower() not in ["ifriqiya", "central maghreb"]]
 
             if is_conquest and winner_base_sh and not winner_base_sh.is_empty:
-                target_polities = [bp for bp in baseline_pols if winner_polity and bp.lower() != winner_polity.lower()]
+                target_polities = [bp for bp in expanded_bps if winner_polity and bp.lower() != winner_polity.lower()]
                 candidate_units_shapes = {}
                 for tp in target_polities:
                     tp_res = get_historical_units(tp, year, context.get("target_region", "") if context else "")
@@ -345,6 +402,11 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                             if geom and not geom.is_empty:
                                 return geom
                     matched_feats = loader.get_province_features(name_str, "")
+                    if not matched_feats:
+                        clean_n = re.sub(r"^(duchy of|archduchy of|princely county of|county of|margraviate of|prince-archbishopric of|kingdom of|principality of)\s+", "", name_str, flags=re.IGNORECASE).strip()
+                        clean_n = re.sub(r"\s*\([^)]*\)", "", clean_n).strip()
+                        if clean_n and clean_n.lower() != name_str.lower():
+                            matched_feats = loader.get_province_features(clean_n, "")
                     g_list = [shape(f["geometry"]) for f in matched_feats if f.get("geometry")]
                     return unary_union(g_list) if g_list else None
 
@@ -398,7 +460,13 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
 
         if getattr(t, "historical_provinces", []):
             h_map = {}
-            for bp in baseline_pols:
+            expanded_bps = list(baseline_pols)
+            scen_txt = (context.get("scenario", "") if context else "").lower()
+            if any(k in scen_txt for k in ["vienna", "austria", "habsburg", "wien", "hungary"]):
+                for rel_pol in ["Archduchy of Austria", "Kingdom of Hungary"]:
+                    if rel_pol not in expanded_bps:
+                        expanded_bps.append(rel_pol)
+            for bp in expanded_bps:
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map.update(res_hist.get("historical_units_map", {}))
             
@@ -407,16 +475,21 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 for h_key, geom in h_map.items():
                     if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
                         if geom and not geom.is_empty:
-                            polity_additions_shapes[t.name].append(geom)
+                            polity_additions_shapes[t.name].append(consolidate_enclave_dots(geom))
                             hp_found = True
                             break
                 if not hp_found:
                     matched_feats = loader.get_province_features(hp_name, "")
+                    if not matched_feats:
+                        clean_hp = re.sub(r"^(duchy of|archduchy of|princely county of|county of|margraviate of|prince-archbishopric of|kingdom of|principality of)\s+", "", hp_name, flags=re.IGNORECASE).strip()
+                        clean_hp = re.sub(r"\s*\([^)]*\)", "", clean_hp).strip()
+                        if clean_hp and clean_hp.lower() != hp_name.lower():
+                            matched_feats = loader.get_province_features(clean_hp, "")
                     for feat_data in matched_feats:
                         g = feat_data.get("geometry")
                         if g:
                             try:
-                                polity_additions_shapes[t.name].append(shape(g))
+                                polity_additions_shapes[t.name].append(consolidate_enclave_dots(shape(g)))
                             except Exception:
                                 pass
 
@@ -429,7 +502,12 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
             p = PartialRegion(**p_raw) if isinstance(p_raw, dict) else p_raw
             expanded_partials.append(p)
             if mode != "proposal_partition" and p.clip_method == "natural_boundary" and p.clip_description:
-                matched_countries = get_countries_for_natural_boundary(p.clip_description, loader)
+                # Constrain natural boundary multi-country expansion strictly to target_countries
+                target_cs = [c.lower() for c in (context.get("target_countries", []) if context else [])]
+                if target_cs:
+                    matched_countries = [c for c in get_countries_for_natural_boundary(p.clip_description, loader) if c.lower() in target_cs]
+                else:
+                    matched_countries = []
                 
                 existing_countries = [
                     (x.country.lower() if hasattr(x, "country") else x.get("country", "").lower())
@@ -600,7 +678,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 for h_key, geom in h_map.items():
                     if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
                         if geom and not geom.is_empty:
-                            polity_additions_shapes[t.name].append(geom)
+                            polity_additions_shapes[t.name].append(consolidate_enclave_dots(geom))
                             break
 
     # Step 2: Merge baseline geometry with additions geometry
@@ -618,14 +696,20 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
         
         if stage2_baselines:
             for sb_key, sb_geom in stage2_baselines.items():
-                if t.name.lower() in sb_key.lower() or sb_key.lower() in t.name.lower():
+                if t.name.lower() in sb_key.lower() or sb_key.lower() in t.name.lower() or (winner_polity and (winner_polity.lower() in t.name.lower() or t.name.lower() in winner_polity.lower()) and (winner_polity.lower() in sb_key.lower() or sb_key.lower() in winner_polity.lower())):
                     base_sh = sb_geom
                     break
         elif comp_geoms:
             for cg_key, cg_geom in comp_geoms.items():
-                if t.name.lower() in cg_key.lower() or cg_key.lower() in t.name.lower():
+                if t.name.lower() in cg_key.lower() or cg_key.lower() in t.name.lower() or (winner_polity and (winner_polity.lower() in t.name.lower() or t.name.lower() in winner_polity.lower()) and (winner_polity.lower() in cg_key.lower() or cg_key.lower() in winner_polity.lower())):
                     base_sh = cg_geom
                     break
+
+        # Always union with the conqueror's own historical baseline geometry at `year` (e.g. 732 AD Umayyad baseline)
+        if is_conquest and winner_polity and (winner_polity.lower() in t.name.lower() or t.name.lower() in winner_polity.lower()):
+            own_yr_geom, _, _ = _get_resolved_baseline_geometry(winner_polity, year, context.get("target_region", "") if context else "")
+            if own_yr_geom and not own_yr_geom.is_empty:
+                base_sh = own_yr_geom.union(base_sh) if (base_sh and not base_sh.is_empty) else own_yr_geom
             
         if not base_sh:
             if actual_name not in baseline_polities:
@@ -672,7 +756,8 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                     comb_shapes.append(base_sh)
                 if add_sh and not add_sh.is_empty:
                     comb_shapes.append(add_sh)
-                item["final_geom"] = unary_union(comb_shapes) if comb_shapes else None
+                merged = unary_union(comb_shapes) if comb_shapes else None
+                item["final_geom"] = consolidate_enclave_dots(merged, max_hole_area=2.5) if merged else None
             else:
                 winner_add = winner_item["additions_geom"] if winner_item else None
                 if base_sh and not base_sh.is_empty:
@@ -714,7 +799,7 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 if other_add and not other_add.is_empty:
                     try:
                         final_sh = final_sh.difference(other_add.buffer(0.001))
-                        print(f"  [PARTITION-DEBUG] Subtracted '{other_name}' additions (area={other_add.area:.4f}) from '{t_name}' → New Area={final_sh.area:.4f}", flush=True)
+                        print(f"  [PARTITION-DEBUG] Subtracted '{other_name}' additions (area={other_add.area:.4f}) from '{t_name}' -> New Area={final_sh.area:.4f}", flush=True)
                     except Exception as e:
                         print(f"  [PARTITION-DEBUG] Error subtracting '{other_name}' from '{t_name}': {e}", flush=True)
             item_i["final_geom"] = final_sh
@@ -754,21 +839,28 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
         if not final_sh or final_sh.is_empty:
             continue
             
-        color = t.color
-        if not color:
-            name_lower = t.name.lower()
-            if "umayyad" in name_lower:
-                color = "#10b981"
-            elif "frank" in name_lower or "caroling" in name_lower:
-                color = "#ef4444"
-            elif "byzant" in name_lower:
-                color = "#8b5cf6"
-            elif "india" in name_lower:
-                color = "#fbbf24"
-            elif "pakistan" in name_lower:
-                color = "#047857"
-            else:
-                color = "#d4a853"
+        # Enforce canonical, consistent polity color across all scenario modes
+        name_lower = t.name.lower()
+        if "ottoman" in name_lower:
+            color = "#15803d"  # Canonical Ottoman emerald green
+        elif "habsburg" in name_lower or "austria" in name_lower:
+            color = "#b91c1c"  # Habsburg imperial red
+        elif "holy roman" in name_lower:
+            color = "#d97706"  # HRE imperial gold
+        elif "umayyad" in name_lower:
+            color = "#10b981"
+        elif "frank" in name_lower or "caroling" in name_lower:
+            color = "#ef4444"
+        elif "byzant" in name_lower:
+            color = "#8b5cf6"
+        elif "spain" in name_lower or "spanish" in name_lower:
+            color = "#dc2626"
+        elif "india" in name_lower:
+            color = "#fbbf24"
+        elif "pakistan" in name_lower:
+            color = "#047857"
+        else:
+            color = t.color or "#d4a853"
             
         status_val = "direct_control" if t.status in ["direct_control", "conquered", "vassal"] else t.status
         features.append({

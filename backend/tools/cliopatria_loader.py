@@ -113,29 +113,52 @@ class CliopatriaDatabase:
     def get_polity_geometry(self, name: str, year: int) -> Optional[Dict[str, Any]]:
         """
         Get the geometry snapshot for a given polity name at the target year.
-        If no exact snapshot covers the year, fall back to the closest one.
+        If no exact snapshot covers the year, fall back to historical epoch aliases/core names active in the target year,
+        and finally to the closest snapshot in time.
         """
         self._ensure_loaded()
         
         norm = normalize_name(name)
         
-        # Collect all candidate features matching the name (exact first, then substring, then core name)
+        target_year = year
+        if year == 1947 and norm in ("india", "republic of india", "pakistan", "islamic republic of pakistan"):
+            # In Cliopatria, 1947 is a temporary 2-month transitional snapshot (FromYear: 1947, ToYear: 1947)
+            # where Hyderabad State and Jammu & Kashmir were isolated separate polygons, leaving
+            # Republic of India with a hollow hole in the Deccan (Hyderabad) and missing Kashmir.
+            # For general historical analysis and partition treaties of India/Pakistan in 1947,
+            # resolve to the integrated 1948-1952 snapshot so Hyderabad and Kashmir are properly included.
+            target_year = 1948
+        
+        def _expand_alias_and_core_candidates(target_list: List[Dict[str, Any]]):
+            epoch_aliases = {
+                "france": ["french third republic", "kingdom of france", "first french empire", "second french empire", "french fourth republic", "french fifth republic"],
+                "germany": ["german empire", "weimar republic", "federal republic of germany"],
+                "russia": ["russian empire", "union of soviet socialist republics", "ussr", "tsardom of russia"],
+                "turkey": ["ottoman empire", "republic of turkey"],
+                "iran": ["persia", "qajar iran", "pahlavi iran", "safavid iran"],
+                "united kingdom": ["kingdom of great britain", "united kingdom of great britain and ireland"],
+                "britain": ["kingdom of great britain", "united kingdom"],
+                "spain": ["kingdom of spain", "spanish empire"],
+                "italy": ["kingdom of italy"],
+                "austria": ["habsburg monarchy", "austrian empire", "austria hungary"],
+            }
+            core_search = get_core_name(name)
+            alias_norms = epoch_aliases.get(norm, []) + epoch_aliases.get(core_search, [])
+            for a_norm in alias_norms:
+                if a_norm in self.by_normalized_name:
+                    target_list.extend(self.by_normalized_name[a_norm])
+            for indexed_name, feats in self.by_normalized_name.items():
+                if is_subphrase(norm, indexed_name) or is_subphrase(indexed_name, norm):
+                    target_list.extend(feats)
+                elif core_search and core_search == get_core_name(indexed_name):
+                    target_list.extend(feats)
+
+        # Collect all candidate features matching the name (exact first, then alias/substring/core name)
         all_candidate_feats = []
         if norm in self.by_normalized_name:
             all_candidate_feats.extend(self.by_normalized_name[norm])
         else:
-            # Substring matching fallback using whole-word phrase checks
-            for indexed_name, feats in self.by_normalized_name.items():
-                if is_subphrase(norm, indexed_name) or is_subphrase(indexed_name, norm):
-                    all_candidate_feats.extend(feats)
-            
-            # Core name matching fallback if still no candidates
-            if not all_candidate_feats:
-                core_search = get_core_name(name)
-                for indexed_name, feats in self.by_normalized_name.items():
-                    core_indexed = get_core_name(indexed_name)
-                    if core_search == core_indexed:
-                        all_candidate_feats.extend(feats)
+            _expand_alias_and_core_candidates(all_candidate_feats)
                         
         if not all_candidate_feats:
             return None
@@ -147,8 +170,22 @@ class CliopatriaDatabase:
             from_yr = props.get("FromYear")
             to_yr = props.get("ToYear")
             if from_yr is not None and to_yr is not None:
-                if from_yr <= year <= to_yr:
+                if from_yr <= target_year <= to_yr:
                     active_candidates.append(feat)
+
+        # 1b. If exact match had no active candidates in `target_year` (e.g. 'France' or 'Germany' in 1919),
+        # check historical epoch aliases and core-name matches active in `target_year`.
+        if not active_candidates:
+            expanded_feats: List[Dict[str, Any]] = []
+            _expand_alias_and_core_candidates(expanded_feats)
+            for feat in expanded_feats:
+                props = feat.get("properties", {})
+                from_yr = props.get("FromYear")
+                to_yr = props.get("ToYear")
+                if from_yr is not None and to_yr is not None and (from_yr <= target_year <= to_yr):
+                    active_candidates.append(feat)
+            if not active_candidates and expanded_feats:
+                all_candidate_feats.extend(expanded_feats)
                     
         if active_candidates:
             # If multiple active candidates exist, choose the one with the closest name length to prevent matching Danish India over India
@@ -163,7 +200,7 @@ class CliopatriaDatabase:
             from_yr = props.get("FromYear")
             to_yr = props.get("ToYear")
             if from_yr is not None and to_yr is not None:
-                dist = min(abs(from_yr - year), abs(to_yr - year))
+                dist = min(abs(from_yr - target_year), abs(to_yr - target_year))
                 if dist < min_dist:
                     min_dist = dist
                     closest_feat = feat

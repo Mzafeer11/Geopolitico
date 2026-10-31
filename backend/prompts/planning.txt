@@ -14,4 +14,5 @@ Extract planning properties matching the requested schema:
 IMPORTANT SCENARIO SPECIFIC RULES:
 - If the prompt involves the "Chenab Formula", the baseline year MUST be set to 1960, the target region MUST be "Kashmir", target_countries MUST be ['India', 'Pakistan'], and baseline_polities MUST be ['India', 'Pakistan'].
 - If the prompt involves the "Balkan Wars" or the Ottoman Empire in the "1912 Balkan War", the baseline year MUST be set to 1911 to ensure the pre-war Ottoman boundaries (including Albania, Macedonia, and Thrace) are loaded.
+- If the prompt involves the 1529 Siege of Vienna, the battle for Vienna, or Ottoman Central European expansion, the baseline year MUST be set to 1529, target_region MUST be "Vienna", target_countries MUST be ['Austria', 'Hungary'], and baseline_polities MUST be ['Ottoman Empire', 'Habsburg Monarchy', 'Kingdom of Hungary'].
 

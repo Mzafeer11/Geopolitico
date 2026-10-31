@@ -159,10 +159,104 @@ String.prototype.stripOrEmpty = function () {
 
 let pollInterval = null;
 
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+const DEFAULT_STAGES = [
+    { id: "guardrail", name: "Stage 1: Refinement of Prompt", detail: "Analyzing counterfactual prompt and verifying historical context...", status: "active" },
+    { id: "planner", name: "Stage 2: Scenario Classification & Planning", detail: "Identifying base year, belligerents, and geopolitical mode...", status: "pending" },
+    { id: "baseline_gis", name: "Stage 3: Historical Baselines & Natural Boundaries", detail: "Querying Cliopatria & resolving natural river/mountain vectors...", status: "pending" },
+    { id: "simulation", name: "Stage 4: Geopolitical Simulation Execution", detail: "Computing territorial transfers, corridors, and demographic shifts...", status: "pending" },
+    { id: "compilation", name: "Stage 5: Cartographic Compilation & Narrative", detail: "Assembling GeoJSON feature collections and synthesizing timeline...", status: "pending" },
+    { id: "audit", name: "Stage 6: Continuity & Enclave Audit", detail: "Verifying territorial continuity, enclave detection, and final audit...", status: "pending" }
+];
+
+function initLoadingProgressUI(scenario) {
+    const badgeEl = document.getElementById("active-stage-badge");
+    const agentEl = document.getElementById("active-agent-display");
+    const detailsEl = document.getElementById("progress-details-display");
+    const stagesListEl = document.getElementById("stages-list");
+    const logContentEl = document.getElementById("live-log-content");
+
+    if (badgeEl) badgeEl.innerText = "Stage 1 of 6";
+    if (agentEl) agentEl.innerText = "Stage 1: Refinement of Prompt";
+    if (detailsEl) detailsEl.innerText = "Analyzing counterfactual prompt and verifying historical context...";
+
+    if (stagesListEl) {
+        stagesListEl.innerHTML = DEFAULT_STAGES.map(st => `
+            <div class="stage-item stage-${st.status}">
+                <span class="stage-status-icon">${st.status === 'active' ? '⏳' : '○'}</span>
+                <div class="stage-info">
+                    <span class="stage-name">${escapeHtml(st.name)}</span>
+                    <span class="stage-desc">${escapeHtml(st.detail)}</span>
+                </div>
+            </div>
+        `).join("");
+    }
+
+    if (logContentEl) {
+        logContentEl.innerHTML = `<div class="log-line log-system">[SYSTEM] Initializing simulation for: "${escapeHtml(scenario.slice(0, 60))}..."</div>`;
+    }
+}
+
+function updateLoadingProgressUI(job) {
+    if (!job) return;
+
+    const badgeEl = document.getElementById("active-stage-badge");
+    const agentEl = document.getElementById("active-agent-display");
+    const detailsEl = document.getElementById("progress-details-display");
+    const stagesListEl = document.getElementById("stages-list");
+    const logContentEl = document.getElementById("live-log-content");
+
+    const stageIdx = job.stage_index || 1;
+    const totalStages = job.total_stages || 6;
+    if (badgeEl) badgeEl.innerText = `Stage ${stageIdx} of ${totalStages}`;
+    if (agentEl) agentEl.innerText = job.current_stage || "Stage 1: Refinement of Prompt";
+    if (detailsEl) detailsEl.innerText = job.stage_detail || job.progress || "Processing geopolitical simulation...";
+
+    // Render pipeline checklist items
+    const stages = (job.stages && job.stages.length > 0) ? job.stages : DEFAULT_STAGES;
+    if (stagesListEl) {
+        stagesListEl.innerHTML = stages.map(st => {
+            let iconText = "○";
+            if (st.status === "completed") iconText = "✓";
+            else if (st.status === "active") iconText = "⏳";
+            return `
+                <div class="stage-item stage-${st.status}">
+                    <span class="stage-status-icon">${iconText}</span>
+                    <div class="stage-info">
+                        <span class="stage-name">${escapeHtml(st.name)}</span>
+                        <span class="stage-desc">${escapeHtml(st.detail || "")}</span>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    // Render live log feed
+    if (logContentEl && job.recent_logs && job.recent_logs.length > 0) {
+        logContentEl.innerHTML = job.recent_logs.map(line => {
+            let cls = "log-line";
+            if (line.includes("[GUARDRAIL]") || line.includes("[STAGE") || line.includes("Refinement")) cls += " log-stage";
+            else if (line.includes("[SYSTEM]") || line.includes("[SIMULATOR")) cls += " log-system";
+            else if (line.includes("[OFFLINE GIS]") || line.includes("[CLIOPATRIA]") || line.includes("[RESOLVER]")) cls += " log-gis";
+            else if (line.includes("[ERR]") || line.includes("failed")) cls += " log-err";
+            return `<div class="${cls}">${escapeHtml(line)}</div>`;
+        }).join("");
+        logContentEl.scrollTop = logContentEl.scrollHeight;
+    }
+}
+
 function startSimulation(scenario) {
     showPanel("loading-section");
-    document.getElementById("active-agent-display").innerText = "Initializing Geopolitical Simulator...";
-    document.getElementById("progress-details-display").innerText = "Analyzing counterfactual context...";
+    initLoadingProgressUI(scenario);
 
     // Clear old poll if any running
     if (pollInterval) clearInterval(pollInterval);
@@ -186,7 +280,7 @@ function startSimulation(scenario) {
             const jobId = data.job_id;
             showToast("Simulation job queued successfully.", "success");
 
-            // Start polling status
+            // Start polling status with 1-second cadence
             pollJobStatus(jobId);
         })
         .catch(err => {
@@ -204,19 +298,8 @@ function pollJobStatus(jobId) {
                 return res.json();
             })
             .then(job => {
-                // Update loading info
-                document.getElementById("progress-details-display").innerText = job.progress || "Processing...";
-
-                // Deduce active stage based on progress message
-                if (job.progress.toLowerCase().includes("analyzing") || job.progress.toLowerCase().includes("context") || job.progress.toLowerCase().includes("planner")) {
-                    document.getElementById("active-agent-display").innerText = "🏛️ Planner Node: active";
-                } else if (job.progress.toLowerCase().includes("locating") || job.progress.toLowerCase().includes("provinces") || job.progress.toLowerCase().includes("spatial")) {
-                    document.getElementById("active-agent-display").innerText = "🗺️ Spatial Processor: active";
-                } else if (job.progress.toLowerCase().includes("applying") || job.progress.toLowerCase().includes("regenerating") || job.progress.toLowerCase().includes("demographic") || job.progress.toLowerCase().includes("conquest") || job.progress.toLowerCase().includes("executing")) {
-                    document.getElementById("active-agent-display").innerText = "🌍 Simulation Nodes: active";
-                } else if (job.progress.toLowerCase().includes("compiling") || job.progress.toLowerCase().includes("map")) {
-                    document.getElementById("active-agent-display").innerText = "🎨 Cartographic Compiler: active";
-                }
+                // Update live stage checklist and logs
+                updateLoadingProgressUI(job);
 
                 if (job.status === "completed") {
                     clearInterval(pollInterval);
@@ -243,7 +326,7 @@ function pollJobStatus(jobId) {
                 showToast("Error polling job status.", "error");
                 showPanel("input-section");
             });
-    }, 2000);
+    }, 1000);
 }
 
 let validationHighlightLayer = null;
@@ -463,62 +546,6 @@ function renderQuestion(q, container) {
     group.appendChild(select);
     container.appendChild(group);
 }
-
-// Bind Refinement panel triggers
-document.addEventListener("DOMContentLoaded", () => {
-    const refineBtn = document.getElementById("refine-btn");
-    const refinementInput = document.getElementById("refinement-input");
-
-    if (refineBtn && refinementInput) {
-        refineBtn.addEventListener("click", () => {
-            const message = refinementInput.value.trim();
-            if (!message) {
-                showToast("Please enter refinement instructions.", "error");
-                return;
-            }
-            if (!currentSessionId) {
-                showToast("No active simulation session available to refine.", "error");
-                return;
-            }
-
-            refinementInput.value = "";
-            showPanel("loading-section");
-            document.getElementById("active-agent-display").innerText = "Applying refinement feedback...";
-            document.getElementById("progress-details-display").innerText = "Generating adjusted geopolitical scenario maps...";
-
-            fetch("/api/interactive/step", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    session_id: currentSessionId,
-                    message: message,
-                    token: ""
-                })
-            })
-                .then(res => {
-                    if (!res.ok) throw new Error("Refinement request failed");
-                    return res.json();
-                })
-                .then(data => {
-                    showToast("Refinement submitted.", "success");
-                    pollJobStatus(data.job_id);
-                })
-                .catch(err => {
-                    console.error(err);
-                    showToast(err.message, "error");
-                    showPanel("results-section");
-                });
-        });
-
-        refinementInput.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") {
-                refineBtn.click();
-            }
-        });
-    }
-});
 
 
 function displayResults(result) {

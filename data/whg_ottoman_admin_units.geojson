@@ -1,0 +1,930 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Anatolia (Asia Minor)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 81592,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          35,
+          39
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Anatolia (Anatolia)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 81331,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              34,
+              39
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              35,
+              39
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              35,
+              39
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Damascus (Damascus)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 227727,
+        "dataset": "gn500",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          36.29128,
+          33.5102
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Damascus (Dimashq)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 4446656,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          36.278,
+          33.512
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Aleppo (Aleppo)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 227717,
+        "dataset": "gn500",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          37.16117,
+          36.20124
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Aleppo (\u1e24alab)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5361302,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          37.161173,
+          36.201241
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Egypt (Egypt)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 83764,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          30,
+          30.0333
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Egypt (Egypt)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 8364141,
+        "dataset": "sfera-upload-whg",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              25.06715931407089,
+              31.63997605571222
+            ],
+            [
+              24.62780462283511,
+              29.080816217468204
+            ],
+            [
+              25.04110223870289,
+              22.84842088818388
+            ],
+            [
+              24.90929583133219,
+              19.737062666662702
+            ],
+            [
+              32.37832558234074,
+              17.697757786587626
+            ],
+            [
+              37.69451734629391,
+              18.408044906603628
+            ],
+            [
+              36.46432421083366,
+              22.158240141997716
+            ],
+            [
+              32.94948668094725,
+              28.35402314982654
+            ],
+            [
+              32.26450573142932,
+              29.690756973036734
+            ],
+            [
+              32.49516694432806,
+              30.005212659114964
+            ],
+            [
+              32.81369909547401,
+              29.547495866053932
+            ],
+            [
+              33.27502152127162,
+              28.857022870422544
+            ],
+            [
+              33.24206991942892,
+              28.577607713039274
+            ],
+            [
+              34.10016980776063,
+              27.801586719357644
+            ],
+            [
+              34.41870195890659,
+              27.986074555991937
+            ],
+            [
+              34.369274556142564,
+              28.305751024014345
+            ],
+            [
+              34.742726043693,
+              29.282965278068573
+            ],
+            [
+              34.89100825198506,
+              29.531804343502888
+            ],
+            [
+              34.21550041421,
+              31.303351562360927
+            ],
+            [
+              33.5180248418732,
+              31.09661084228386
+            ],
+            [
+              33.270887828053056,
+              31.20473621301749
+            ],
+            [
+              33.073178216996965,
+              31.20473621301749
+            ],
+            [
+              32.68325092852521,
+              31.05426736089785
+            ],
+            [
+              31.952823754345673,
+              31.46279582750113
+            ],
+            [
+              31.639783536840174,
+              31.42999119895898
+            ],
+            [
+              31.118049840997678,
+              31.58922028504041
+            ],
+            [
+              30.73361448616633,
+              31.56114075238741
+            ],
+            [
+              30.058106648391277,
+              31.331508446845866
+            ],
+            [
+              29.294727872369084,
+              30.846983691277167
+            ],
+            [
+              28.937752185740024,
+              30.80452940834568
+            ],
+            [
+              28.63020390187494,
+              31.002488617494663
+            ],
+            [
+              28.443435093327896,
+              31.06838395004646
+            ],
+            [
+              27.899733662923577,
+              31.087202809661367
+            ],
+            [
+              27.861290127440466,
+              31.21413258817725
+            ],
+            [
+              27.306604829755276,
+              31.364347501872825
+            ],
+            [
+              25.91714561872205,
+              31.63132372050302
+            ],
+            [
+              25.34598452011553,
+              31.495588967060332
+            ],
+            [
+              25.14524587240506,
+              31.574518567942867
+            ],
+            [
+              25.139753938764606,
+              31.658719687254727
+            ],
+            [
+              25.06715931407089,
+              31.63997605571222
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Buda (Buda)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5016506,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          -97.8333,
+          30.0833
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Buda (Buda)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5319895,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          -104.9667,
+          40.3167
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Baghdad (Baghdad)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 227565,
+        "dataset": "gn500",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          44.40088,
+          33.34058
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Baghdad (Baghd\u0101d)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5799483,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          44.4167,
+          33.35
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Tripoli (Tripoli)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 227849,
+        "dataset": "gn500",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          13.18733,
+          32.88743
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Tripoli (Tripoli)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 90523,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              13.18,
+              32.892
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              13.1858,
+              32.9022
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Tunis (Tunis)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 90585,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          9,
+          36.8333
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Tunis (Tunisia)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 90587,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              10,
+              34
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              9,
+              34
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              9,
+              36.8333
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Algiers (Algiers)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 81238,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          2,
+          36.7
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Algiers (Algeria)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 81236,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              2,
+              28
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              3,
+              28
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              2,
+              36.7
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Morea (Morea)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 87201,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          22.2,
+          37.6
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Morea (Achala)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 7137159,
+        "dataset": "Truhart",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "MultiPoint",
+        "coordinates": [
+          [
+            22.352222222222,
+            37.349722222222
+          ],
+          [
+            22.41777,
+            37.62334
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Trebizond (Trebizond)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 8364357,
+        "dataset": "sfera-upload-whg",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.72,
+          41.0
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Trebizond (Trabzon)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 4854896,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          39.81255,
+          40.869457
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Erzurum (Erzurum Havaalan\u0131)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 4974012,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          41.172262,
+          39.9562
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Erzurum (Erzurum)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5948855,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          41.276944,
+          39.908611
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Diyarbekir (Diyarbak\u0131r)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 2487549,
+        "dataset": "gnmore",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          40.21721,
+          37.91363
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Diyarbekir (Diyarbak\u0131r)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5573861,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          40.217213,
+          37.913629
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Mosul (Mosul)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 227706,
+        "dataset": "gn500",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          43.11889,
+          36.335
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Mosul (Al-Maw\u1e63il)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 6117414,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          43.1333,
+          36.3333
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Sidon (Sidon)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 6055116,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          -90.2,
+          33.4
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Sidon (Sidon)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 4504041,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          -91.9333,
+          35.3333
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Basra (Basra)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5459509,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          71.984444,
+          32.778611
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Basra (Basra)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5721252,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          74.250278,
+          31.784167
+        ],
+        "type": "Point"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Hejaz (Hejaz)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 84774,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              40.8597,
+              23.5036
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              38.5,
+              24.5
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Hejaz (Hejaz)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 7687684,
+        "dataset": "hced_06Jan",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          42.3176938,
+          18.8936784
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Yemen (Yemen)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 2486826,
+        "dataset": "ne_countries",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          [
+            [
+              42.5457462900001,
+              12.1114436720001
+            ],
+            [
+              42.5457462900001,
+              18.9956375130001
+            ],
+            [
+              54.5402938160002,
+              18.9956375130001
+            ],
+            [
+              54.5402938160002,
+              12.1114436720001
+            ],
+            [
+              42.5457462900001,
+              12.1114436720001
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Yemen (Yemen)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 91422,
+        "dataset": "black",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "coordinates": [
+              48,
+              15
+            ],
+            "type": "Point"
+          },
+          {
+            "coordinates": [
+              48,
+              15
+            ],
+            "type": "Point"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Archipelago (Archipelago)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 8364100,
+        "dataset": "sfera-upload-whg",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          25.1,
+          38.92
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Archipelago (Aegean Sea)",
+        "division_type": "Ottoman Eyalet / Regional Center",
+        "place_id": 5258996,
+        "dataset": "tgn_filtered_01",
+        "source": "World Historical Gazetteer (WHG API)"
+      },
+      "geometry": {
+        "coordinates": [
+          25,
+          39
+        ],
+        "type": "Point"
+      }
+    }
+  ]
+}

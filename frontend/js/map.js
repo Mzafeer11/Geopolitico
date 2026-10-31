@@ -23,7 +23,7 @@ function initMap() {
     }).addTo(map);
 
     // CartoDB Dark Matter tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_2l84_1_a4a33a1ad51e9fc32f33f972', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 20
@@ -258,7 +258,7 @@ function updateMapLayers() {
         }
     }
 
-    // Only show natural boundary overlays when the user is in "rivers" (Natural Borders) view mode
+    // Show natural boundary overlays ONLY in "rivers" (Natural Borders) view mode
     if (currentMode === "rivers") {
         const data = window.activeScenarioData;
         

@@ -72,9 +72,32 @@
                 <div class="spinner"></div>
                 <h2>Simulating Timeline...</h2>
                 <div id="progress-container">
-                    <p class="current-agent" id="active-agent-display">Geopolitical Simulator is active...</p>
-                    <p class="progress-details" id="progress-details-display">Loading historical maps and baseline
-                        data...</p>
+                    <div class="stage-badge-container">
+                        <span id="active-stage-badge" class="stage-badge">Stage 1 of 6</span>
+                    </div>
+                    <p class="current-agent" id="active-agent-display">Stage 1: Refinement of Prompt</p>
+                    <p class="progress-details" id="progress-details-display">Analyzing counterfactual prompt and verifying historical context...</p>
+                </div>
+
+                <!-- Step-by-Step Pipeline Stages Tracker -->
+                <div class="pipeline-stages-container" id="pipeline-stages-container">
+                    <h4 class="pipeline-stages-title">Pipeline Stages</h4>
+                    <div class="stages-list" id="stages-list">
+                        <!-- Populated dynamically via JS -->
+                    </div>
+                </div>
+
+                <!-- Live Engine Log Console -->
+                <div class="live-log-box" id="live-log-box">
+                    <div class="live-log-header">
+                        <span class="terminal-dot red"></span>
+                        <span class="terminal-dot yellow"></span>
+                        <span class="terminal-dot green"></span>
+                        <span class="live-log-title">Live Engine Log</span>
+                    </div>
+                    <div class="live-log-content" id="live-log-content">
+                        <div class="log-line">[SYSTEM] Initializing simulation pipeline...</div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -150,21 +173,6 @@
                     <!-- Sources dynamically populated -->
                 </ul>
             </div>
-
-            <!-- Refinement / Iteration Input -->
-            <div class="refinement-container"
-                style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.1); padding-top:15px; display:flex; flex-direction:column; gap:5px;">
-                <label for="refinement-input"
-                    style="color:#fbbf24; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; display:flex; align-items:center; gap:5px;">
-                    💡 Refine Geopolitical Outcome
-                </label>
-                <div class="refinement-row" style="display:flex; gap:10px;">
-                    <input type="text" id="refinement-input" placeholder="E.g., 'Assume they also conquered Aquitaine'"
-                        style="flex:1; padding:8px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:4px; color:#fff; font-size:12px;" />
-                    <button id="refine-btn" class="primary-btn"
-                        style="padding:8px 15px; margin:0; font-size:12px; width:auto; flex-shrink:0;">Apply</button>
-                </div>
-            </div>
         </section>
 
     </div>
@@ -201,9 +209,9 @@
 
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="js/ui.js?v=1"></script>
-    <script src="js/map.js?v=1"></script>
-    <script src="js/app.js?v=1"></script>
+    <script src="js/ui.js?v=5"></script>
+    <script src="js/map.js?v=5"></script>
+    <script src="js/app.js?v=5"></script>
 </body>
 
 </html>

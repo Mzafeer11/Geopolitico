@@ -6,9 +6,13 @@ Base Year: {year}
 
 Task:
 Extract or estimate the target demographic distribution parameters:
-1. target_group: The ethnic, religious, or population group undergoing the shift (e.g. "Muslims", "Protestants").
-2. target_percentage: The overall target percentage requested for this group across the region (e.g. 60.0). If not explicitly given, provide a plausible historical target percentage.
-3. spatial_alpha: Spatial weighting factor between local district baseline (alpha) and neighboring districts (1 - alpha), default 0.70.
-4. extracted_year: The explicit or implicit base year mentioned in the scenario prompt (e.g., 1947, 1946, 1941). If none mentioned, use {year}.
+1. target_group: The ethnic, religious, or linguistic population group undergoing the shift (e.g. "Muslims", "Kurds", "Serbs", "French", "Hungarians", "Turkish Cypriots").
+2. target_countries: Modern sovereign country names covering the geographic region of the demographic simulation (e.g. ["India", "Pakistan", "Bangladesh"] for British India; ["Turkey", "Iraq", "Syria", "Iran"] for Kurdistan; ["Bosnia and Herzegovina"] for Bosnia; ["Belgium"] for Belgium).
+3. majority_state_name: Name of the polity formed by areas where `target_group` has a >= 50% majority (e.g. "New Pakistan", "Independent Kurdistan", "Republika Srpska", "Wallonia").
+4. remainder_state_name: Name of the remaining polity where `target_group` is < 50% (e.g. "New India", "Remaining Sovereign States", "Federation of Bosnia", "Flanders").
+5. baseline_polity_name: Name of the undivided baseline region or polity before partition (e.g. "British India", "Levant & Mesopotamia", "Bosnia and Herzegovina").
+6. target_percentage: The overall target percentage requested for this group across the region (e.g. 60.0). If not explicitly given, provide a plausible counterfactual target percentage (e.g. 55.0).
+7. spatial_alpha: Spatial weighting factor between local district baseline (alpha) and neighboring districts (1 - alpha), default 0.70.
+8. extracted_year: The explicit or implicit base year mentioned in the scenario prompt (e.g., 1947, 1946, 1941, 1992). If none mentioned, use {year}.
 
 Respond in JSON format matching the schema provided.

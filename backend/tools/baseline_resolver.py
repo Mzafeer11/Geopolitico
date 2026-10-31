@@ -17,8 +17,16 @@ from backend.config import DATA_DIR
 from backend.tools.cliopatria_loader import cliopatria_db, normalize_name
 from backend.tools.country_polygons import CountryPolygonLoader, get_country_polygon_loader
 from backend.tools.gis_tools import natural_boundary_tool
+from backend.tools.composite_monarchy_resolver import (
+    extract_theater_box,
+    auto_compute_theater_radius,
+    decompose_composite_polygon,
+    detect_composite_polity,
+    merge_theater_polities,
+)
 
-WIKIDATA_CACHE_FILE = DATA_DIR / "wikidata_admin_cache.json"
+AI_PROVINCE_CACHE_FILE = DATA_DIR / "ai_province_cache.json"
+WIKIDATA_CACHE_FILE = AI_PROVINCE_CACHE_FILE if AI_PROVINCE_CACHE_FILE.exists() else (DATA_DIR / "wikidata_admin_cache.json")
 
 # In-memory cache for wikidata_admin_cache.json
 _WIKIDATA_CACHE: Optional[Dict[str, Any]] = None
@@ -157,52 +165,163 @@ def get_historical_units(
     polity_name: str, 
     year: int = 732,
     region: str = "",
-    target_boundary: Optional[str] = None
+    target_boundary: Optional[str] = None,
+    anchor_lat: Optional[float] = None,
+    anchor_lon: Optional[float] = None,
+    theater_radius_deg: Optional[float] = None,
+    winner_polity: Optional[str] = None,
+    theater_box: Optional[Polygon] = None,
+    override_geometry: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    4-Tier Historical Resolution Engine for Geopolitico:
-    - Tier 1: Wikidata Structured Admin Cache
+    4-Tier Historical Resolution Engine for Geopolitico with Composite Monarchy & Theater-Bounded Support:
+    - Tier 1: Wikidata Structured Admin Cache / ai_province_cache.json
     - Tier 2: Wikipedia Parsed Admin Text
     - Tier 3: LLM Natural Boundary + Centroid Direction (fallback if Tier 1 & 2 fail)
     - Tier 4: Cliopatria Coarse Polygon
     """
     from backend.tools.spatial_cache import SimulationCache
     cache_inst = SimulationCache.get_instance()
-    cached = cache_inst.get_historical_units(polity_name, year, region)
+    
+    # Construct anchor point and theater bounding box
+    anchor_point = None
+    if anchor_lat is not None and anchor_lon is not None:
+        anchor_point = Point(anchor_lon, anchor_lat)
+        if theater_box is None:
+            rad = theater_radius_deg if theater_radius_deg is not None else 15.0
+            theater_box = extract_theater_box(anchor_lat, anchor_lon, radius_deg=rad)
+
+    cache_key_extra = f"_{round(anchor_lat, 2)}_{round(anchor_lon, 2)}" if anchor_lat and anchor_lon else ""
+    cached = cache_inst.get_historical_units(f"{polity_name}{cache_key_extra}", year, region)
     if cached is not None and not target_boundary:
         if cached.get("provinces_core") or cached.get("provinces_edge"):
             return cached
 
-    clio_feat = cliopatria_db.get_polity_geometry(polity_name, year)
     cliopatria_shape = None
-    if clio_feat and clio_feat.get("geometry"):
-        try:
-            cliopatria_shape = shape(clio_feat["geometry"])
-        except Exception:
-            pass
+    if override_geometry is not None:
+        cliopatria_shape = override_geometry
+    else:
+        clio_feat = cliopatria_db.get_polity_geometry(polity_name, year)
+        if clio_feat and clio_feat.get("geometry"):
+            try:
+                cliopatria_shape = shape(clio_feat["geometry"])
+            except Exception:
+                pass
+
+    # Retrieve winner geometry if winner_polity is provided (for Rule Q3 border-sharing priority)
+    winner_geom = None
+    if winner_polity:
+        w_feat = cliopatria_db.get_polity_geometry(winner_polity, year)
+        if w_feat and w_feat.get("geometry"):
+            try:
+                winner_geom = shape(w_feat["geometry"])
+            except Exception:
+                pass
+
+    # Only decompose composite monarchy shapes for early-modern Spanish/Habsburg personal union quirks (1500-1700 AD)
+    norm_pol_check = normalize_name(polity_name)
+    is_spanish_habsburg_composite = (1500 <= year <= 1700 and ("spain" in norm_pol_check or "spanish" in norm_pol_check))
+    if is_spanish_habsburg_composite and cliopatria_shape is not None and (theater_box is not None or anchor_point is not None or winner_geom is not None):
+        cliopatria_shape = decompose_composite_polygon(
+            cliopatria_shape,
+            anchor_point=anchor_point,
+            theater_box=theater_box,
+            winner_geom=winner_geom
+        )
+
+    # Strip transoceanic overseas colonies for modern European colonial empires (year >= 1700) unless anchor is overseas
+    european_colonial_tokens = ("france", "french", "germany", "german", "britain", "british", "united kingdom", "spain", "spanish", "portugal", "portuguese", "netherlands", "dutch", "italy", "italian", "belgium", "belgian")
+    if year >= 1700 and cliopatria_shape is not None and not cliopatria_shape.is_empty and any(tok in norm_pol_check for tok in european_colonial_tokens):
+        b_minx, b_miny, b_maxx, b_maxy = cliopatria_shape.bounds
+        if (b_maxx - b_minx) > 40.0 or (b_maxy - b_miny) > 35.0:
+            from shapely.geometry import box as _sbox
+            if anchor_lat is not None and anchor_lon is not None and not (-15.0 <= anchor_lon <= 40.0 and 34.0 <= anchor_lat <= 65.0):
+                clip_env = _sbox(anchor_lon - 18.0, anchor_lat - 18.0, anchor_lon + 18.0, anchor_lat + 18.0)
+            else:
+                clip_env = _sbox(-12.0, 35.0, 32.0, 62.0)
+            clipped_metro = cliopatria_shape.intersection(clip_env)
+            if clipped_metro and not clipped_metro.is_empty and clipped_metro.area >= 1.0:
+                cliopatria_shape = clipped_metro
 
     cache = _load_wikidata_cache()
     
     polity_data = None
     norm_target = normalize_name(polity_name)
+
+    # Canonical alias resolution for common shorthand / plural / epoch names
+    canonical_alias_map = {
+        "byzantine": "Byzantine Empire",
+        "byzantines": "Byzantine Empire",
+        "byzantine empire": "Byzantine Empire",
+        "eastern roman empire": "Byzantine Empire" if year >= 550 else "Eastern Roman Empire",
+        "umayyad": "Umayyad Caliphate" if year <= 755 else "Emirate of Cordoba",
+        "umayyads": "Umayyad Caliphate" if year <= 755 else "Emirate of Cordoba",
+        "umayyad caliphate": "Umayyad Caliphate",
+        "frank": "Kingdom of the Franks",
+        "franks": "Kingdom of the Franks",
+        "frankish": "Kingdom of the Franks",
+        "frankish empire": "Kingdom of the Franks",
+        "kingdom of the franks": "Kingdom of the Franks",
+        "ottoman": "Ottoman Empire",
+        "ottomans": "Ottoman Empire",
+        "ottoman empire": "Ottoman Empire",
+        "habsburg": "Habsburg Monarchy",
+        "habsburgs": "Habsburg Monarchy",
+        "habsburg monarchy": "Habsburg Monarchy",
+        "hungary": "Kingdom of Hungary" if year < 1918 else "Hungary",
+        "hungarian empire": "Kingdom of Hungary",
+        "france": "French Third Republic" if 1870 <= year <= 1940 else ("Kingdom of France" if year < 1792 else "France"),
+        "germany": "German Empire" if 1871 <= year <= 1919 else ("Weimar Republic" if 1919 < year <= 1933 else "Germany"),
+    }
+
     best_match_key = None
-    best_match_score = -100
-    target_words = set(w.rstrip("s").rstrip("ish") for w in norm_target.split() if len(w) > 2)
-    for c_name, c_data in cache.items():
-        c_norm = normalize_name(c_name)
-        c_words = set(w.rstrip("s").rstrip("ish") for w in c_norm.split() if len(w) > 2)
-        overlap = len(target_words & c_words)
-        if norm_target == c_norm or norm_target in c_norm or c_norm in norm_target or overlap >= 2:
-            num_units = len(c_data.get("admin_units", []))
-            score = overlap * 40
-            if c_norm == norm_target:
-                score += 100
-            score += min(num_units, 20) * 10
-            if c_name.strip().startswith("(") and c_name.strip().endswith(")"):
-                score -= 80
-            if score > best_match_score:
-                best_match_score = score
-                best_match_key = c_name
+    best_match_score = -1000
+    if norm_target in canonical_alias_map and canonical_alias_map[norm_target] in cache:
+        best_match_key = canonical_alias_map[norm_target]
+        best_match_score = 1000
+    else:
+        generic_qualifiers = {"empire", "kingdom", "republic", "sultanate", "caliphate", "principality", "duchy", "state", "states", "of", "the", "and"}
+        def _stem_token(w: str) -> str:
+            for suf in ("ians", "ian", "ish", "es", "s"):
+                if len(w) > len(suf) + 2 and w.endswith(suf):
+                    return w[:-len(suf)]
+            return w
+
+        target_words = set(_stem_token(w) for w in norm_target.split() if len(w) > 2)
+        distinctive_target_words = target_words - generic_qualifiers
+
+        for c_name, c_data in cache.items():
+            c_norm = normalize_name(c_name)
+            c_words = set(_stem_token(w) for w in c_norm.split() if len(w) > 2)
+            distinctive_c_words = c_words - generic_qualifiers
+            overlap = len(target_words & c_words)
+            distinctive_overlap = len(distinctive_target_words & distinctive_c_words)
+
+            if norm_target == c_norm or norm_target in c_norm or c_norm in norm_target or overlap >= 2 or distinctive_overlap >= 1:
+                num_units = len(c_data.get("admin_units", []))
+                score = overlap * 40 + distinctive_overlap * 80
+                if c_norm == norm_target:
+                    score += 200
+                # Penalize extra unmatched distinctive words (e.g. 'emirate', 'cordoba' when querying 'umayyad')
+                extra_distinctive = len(distinctive_c_words - distinctive_target_words)
+                score -= extra_distinctive * 60
+
+                # Historical epoch alignment bonus/penalty
+                p_from = c_data.get("peak_year_from")
+                p_to = c_data.get("peak_year_to")
+                if p_from is not None and p_to is not None:
+                    if p_from - 150 <= year <= p_to + 150:
+                        score += 150
+                    else:
+                        dist_yr = min(abs(year - p_from), abs(year - p_to))
+                        score -= min(300, int(dist_yr * 0.8))
+
+                score += min(num_units, 15) * 4
+                if c_name.strip().startswith("(") and c_name.strip().endswith(")"):
+                    score -= 120
+                if score > best_match_score:
+                    best_match_score = score
+                    best_match_key = c_name
 
     if best_match_key:
         polity_data = cache[best_match_key]
@@ -211,6 +330,7 @@ def get_historical_units(
 
     # Advanced Option 5 & Option 6 Mapping Loop
     def _map_units_to_provinces_advanced(units_list: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        nonlocal cliopatria_shape
         core_features = []
         partial_features = []
         province_unit_counts: Dict[str, List[str]] = {}
@@ -225,13 +345,14 @@ def get_historical_units(
             if not any(k in u_name_lower for k in forbidden_keywords):
                 clean_units.append(u)
 
-        units_list_to_use = clean_units if clean_units else units_list
+        units_list_to_use = list(clean_units if clean_units else units_list)
 
         # Bounded Voronoi Polygon Tessellation Setup
         voronoi_unit_shapes = {}
         valid_unit_points = []
         valid_unit_names = []
         unit_meta_map = {}
+        unit_point_map = {}
 
         for unit in units_list_to_use:
             u_name = unit.get("name", "Unknown")
@@ -240,36 +361,93 @@ def get_historical_units(
             unit_meta_map[u_name] = unit
             u_lat, u_lon = unit.get("latitude"), unit.get("longitude")
             if u_lat is not None and u_lon is not None:
-                valid_unit_points.append(Point(u_lon, u_lat))
+                pt_obj = Point(u_lon, u_lat)
+                valid_unit_points.append(pt_obj)
                 valid_unit_names.append(u_name)
+                unit_point_map[u_name] = pt_obj
 
-        if len(valid_unit_points) >= 2 and cliopatria_shape and not cliopatria_shape.is_empty:
+        if cliopatria_shape is None or cliopatria_shape.is_empty:
+            # 1. Search for dynastic union or relation in Cliopatria containing this polity
             try:
-                from shapely.ops import voronoi_diagram
-                from shapely.geometry import MultiPoint, box
+                for active_f in cliopatria_db.get_active_polities(year):
+                    ap_props = active_f.get("properties", {})
+                    ap_name = ap_props.get("Name", "")
+                    ap_comp = ap_props.get("Components", "")
+                    if polity_name.lower() in ap_name.lower() or polity_name.lower() in ap_comp.lower():
+                        if active_f.get("geometry"):
+                            rel_shape = shape(active_f["geometry"])
+                            if rel_shape and not rel_shape.is_empty:
+                                cliopatria_shape = rel_shape
+                                break
+            except Exception:
+                pass
+
+        if cliopatria_shape is None or cliopatria_shape.is_empty:
+            # 2. Construct authentic spatial envelope from underlying district/province polygons
+            district_polys = []
+            if valid_unit_points:
+                for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                    matched_feats = loader.get_province_features(u_n, "")
+                    if matched_feats:
+                        for mf in matched_feats:
+                            if mf.get("geometry"):
+                                try:
+                                    district_polys.append(shape(mf["geometry"]))
+                                except Exception:
+                                    pass
+                    else:
+                        for feat in loader.provinces_data:
+                            geom = feat.get("geometry")
+                            if geom:
+                                try:
+                                    sh = shape(geom)
+                                    if sh.contains(pt):
+                                        district_polys.append(sh)
+                                        break
+                                except Exception:
+                                    pass
+
+            if district_polys:
+                cliopatria_shape = unary_union(district_polys)
+            elif valid_unit_points:
+                from shapely.geometry import MultiPoint
                 mp = MultiPoint(valid_unit_points)
-                v_diag = voronoi_diagram(mp, envelope=box(*cliopatria_shape.bounds).buffer(2.0))
-                
-                # Pair Voronoi cells to nearest unit point
-                for v_poly in v_diag.geoms:
-                    clipped_v = cliopatria_shape.intersection(v_poly)
-                    if clipped_v and not clipped_v.is_empty:
-                        min_d = float("inf")
-                        matched_u = None
-                        for pt, u_n in zip(valid_unit_points, valid_unit_names):
-                            d = v_poly.distance(pt)
-                            if d < min_d:
-                                min_d = d
-                                matched_u = u_n
-                        if matched_u:
-                            if matched_u not in voronoi_unit_shapes:
-                                voronoi_unit_shapes[matched_u] = clipped_v
-                            else:
-                                voronoi_unit_shapes[matched_u] = unary_union([voronoi_unit_shapes[matched_u], clipped_v])
-            except Exception as e_v:
-                print(f"[WARN] Voronoi tessellation fallback to spatial centroid matching: {e_v}", flush=True)
-        elif len(valid_unit_points) == 1 and cliopatria_shape:
-            voronoi_unit_shapes[valid_unit_names[0]] = cliopatria_shape
+                cliopatria_shape = mp.convex_hull
+            else:
+                return [], [], None, {"units_found": 0, "units_mapped": 0, "units_unmapped": 0}
+
+        if is_spanish_habsburg_composite and cliopatria_shape is not None and (theater_box is not None or anchor_point is not None or winner_geom is not None):
+            cliopatria_shape = decompose_composite_polygon(
+                cliopatria_shape,
+                anchor_point=anchor_point,
+                theater_box=theater_box,
+                winner_geom=winner_geom
+            )
+
+        def _resolve_unit_region(u_meta: dict) -> str:
+            if not u_meta:
+                return ""
+            u_country = u_meta.get("present_day_country", "")
+            if not u_country and u_meta.get("capital_modern"):
+                u_country = u_meta["capital_modern"].split(",")[-1].strip()
+            reg = _get_landmass_region(u_country) if u_country else "OTHER"
+            if reg != "OTHER":
+                return reg
+            u_lat = u_meta.get("latitude")
+            u_lon = u_meta.get("longitude")
+            if u_lat is None or u_lon is None:
+                return ""
+            if u_lat > 36.0 and u_lon < 26.5:
+                return "EUROPE"
+            if u_lat <= 37.5 and u_lon < 35.0:
+                return "AFRICA"
+            if u_lat < 31.0 and 35.0 <= u_lon < 60.0:
+                return "ARABIAN_PENINSULA"
+            if u_lat >= 30.0 and 26.5 <= u_lon < 48.5:
+                return "LEVANT_MESOPOTAMIA"
+            if u_lat >= 24.0 and u_lon >= 45.0:
+                return "PERSIA_CENTRAL_ASIA"
+            return ""
 
         # Collect available landmass regions represented by valid units of this polity
         available_unit_landmasses = set()
@@ -277,34 +455,69 @@ def get_historical_units(
             u_inc = u_meta.get("inception") if u_meta else None
             if u_inc and u_inc > year:
                 continue
-            u_country = u_meta.get("present_day_country", "") if u_meta else ""
-            u_lat = u_meta.get("latitude") if u_meta else None
-            u_lon = u_meta.get("longitude") if u_meta else None
-            u_reg = _get_landmass_region(u_country) if u_country else ("EUROPE" if u_lat and u_lat > 36.0 and u_lon < 25.0 else ("AFRICA" if u_lat and u_lat <= 37.0 and u_lon < 35.0 else ("ARABIAN_PENINSULA" if u_lat and u_lat < 30.0 and 45.0 < u_lon < 60.0 else ("PERSIA_CENTRAL_ASIA" if u_lat and u_lat >= 25.0 and u_lon >= 45.0 else ""))))
+            u_reg = _resolve_unit_region(u_meta)
             if u_reg:
                 available_unit_landmasses.add(u_reg)
 
         def _is_unit_compatible(prov_admin: str, u_name: str, u_meta: dict) -> bool:
-            # Generic Temporal Inception Check (e.g. Tahert/Central Maghreb founded 761 AD > query year 732 AD)
             u_inc = u_meta.get("inception") if u_meta else None
             if u_inc and u_inc > year:
                 return False
 
             prov_reg = _get_landmass_region(prov_admin)
-            u_country = u_meta.get("present_day_country", "") if u_meta else ""
-            u_lat = u_meta.get("latitude") if u_meta else None
-            u_lon = u_meta.get("longitude") if u_meta else None
+            u_reg = _resolve_unit_region(u_meta)
 
-            u_reg = _get_landmass_region(u_country) if u_country else ("EUROPE" if u_lat and u_lat > 36.0 and u_lon < 25.0 else ("AFRICA" if u_lat and u_lat <= 37.0 and u_lon < 35.0 else ("ARABIAN_PENINSULA" if u_lat and u_lat < 30.0 and 45.0 < u_lon < 60.0 else ("PERSIA_CENTRAL_ASIA" if u_lat and u_lat >= 25.0 and u_lon >= 45.0 else ""))))
+            # Never allow European Iberian/Italian units to claim African or Asian provinces across the sea
+            if u_reg == "EUROPE" and prov_reg in ("AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"):
+                return False
+            if prov_reg == "EUROPE" and u_reg in ("AFRICA", "ARABIAN_PENINSULA", "PERSIA_CENTRAL_ASIA"):
+                return False
 
-            # SAME-LANDMASS PREFERENCE RULE:
-            # If the polity HAS candidate units on the province's same landmass, Disqualify water-crossing units!
-            # If the polity has NO candidate unit on the province's landmass (e.g. Ottoman/Byzantine across Bosphorus), ALLOW sea crossing!
+            # Allow cross-Aegean / Bosphorus sharing between Greece/Bulgaria (EUROPE) and Turkey/Cyprus (LEVANT_MESOPOTAMIA) ONLY if needed
             has_same_landmass_unit = prov_reg in available_unit_landmasses
             if has_same_landmass_unit and u_reg and u_reg != prov_reg:
                 return False
 
             return True
+
+        # Build Per-Landmass AND Global Bounded Voronoi Diagrams so cross-strait points (e.g. Spain vs Morocco) never block each other
+        if len(valid_unit_points) >= 2 and cliopatria_shape and not cliopatria_shape.is_empty:
+            try:
+                from shapely.ops import voronoi_diagram
+                from shapely.geometry import MultiPoint, box as sh_box
+                env_box = sh_box(*cliopatria_shape.bounds).buffer(2.0)
+
+                # Group points by landmass region first
+                reg_to_pts: Dict[str, List[Tuple[Point, str]]] = {}
+                for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                    r_key = _resolve_unit_region(unit_meta_map.get(u_n, {})) or "GLOBAL"
+                    reg_to_pts.setdefault(r_key, []).append((pt, u_n))
+
+                for r_key, pt_list in reg_to_pts.items():
+                    if len(pt_list) >= 2:
+                        mp_reg = MultiPoint([p for p, _ in pt_list])
+                        v_diag = voronoi_diagram(mp_reg, envelope=env_box)
+                        for v_poly in v_diag.geoms:
+                            clipped_v = cliopatria_shape.intersection(v_poly)
+                            if clipped_v and not clipped_v.is_empty:
+                                min_d = float("inf")
+                                matched_u = None
+                                for pt, u_n in pt_list:
+                                    d = v_poly.distance(pt)
+                                    if d < min_d:
+                                        min_d = d
+                                        matched_u = u_n
+                                if matched_u:
+                                    voronoi_unit_shapes[matched_u] = (
+                                        clipped_v if matched_u not in voronoi_unit_shapes
+                                        else unary_union([voronoi_unit_shapes[matched_u], clipped_v])
+                                    )
+                    elif len(pt_list) == 1:
+                        # Single unit in this landmass covers the landmass portion of cliopatria_shape
+                        _, single_u = pt_list[0]
+                        voronoi_unit_shapes[single_u] = cliopatria_shape
+            except Exception:
+                pass
 
         # Epoch Historical Regional Alias Map
         epoch_aliases = {}
@@ -328,10 +541,12 @@ def get_historical_units(
 
             try:
                 p_geom = shape(feat["geometry"])
-                if cliopatria_shape and not cliopatria_shape.intersects(p_geom):
+
+                # STRICT BOUNDING INTERSECTION: must intersect polity shape
+                if not cliopatria_shape or not cliopatria_shape.intersects(p_geom):
                     continue
 
-                intersection = cliopatria_shape.intersection(p_geom) if cliopatria_shape else p_geom
+                intersection = cliopatria_shape.intersection(p_geom)
                 if intersection.is_empty:
                     continue
 
@@ -346,11 +561,16 @@ def get_historical_units(
 
                 best_unit = None
                 max_area = 0.0
+                centroid = p_geom.centroid
+                p_lat, p_lon = centroid.y, centroid.x
 
-                # 1. Primary Overlay: Maximum Overlapping Voronoi Polygon Area (Landmass Filtered)
+                # 1. Primary Overlay: Maximum Overlapping Voronoi Polygon Area (Landmass & Distance Filtered)
                 for u_n, v_sh in voronoi_unit_shapes.items():
                     u_meta = unit_meta_map.get(u_n, {})
                     if not _is_unit_compatible(admin, u_n, u_meta):
+                        continue
+                    u_pt = unit_point_map.get(u_n)
+                    if u_pt is not None and _haversine_distance(p_lat, p_lon, u_pt.y, u_pt.x) > 1400.0:
                         continue
                     if v_sh.intersects(intersection):
                         ov_area = v_sh.intersection(intersection).area
@@ -358,33 +578,34 @@ def get_historical_units(
                             max_area = ov_area
                             best_unit = u_n
 
-                # 2. Secondary Overlay: Point KNN with Dynamic Bounding Box Distance Cap & Landmass Filter
+                # 2. Secondary Overlay: Point KNN with Landmass Preference
                 if not best_unit and valid_unit_points:
-                    centroid = p_geom.centroid
-                    p_lat, p_lon = centroid.y, centroid.x
                     prov_region = _get_landmass_region(admin)
-
                     min_score = float("inf")
-                    best_dist_km = 0.0
-                    MAX_KNN_DISTANCE_KM = 350.0
 
                     for pt, u_n in zip(valid_unit_points, valid_unit_names):
                         u_meta = unit_meta_map.get(u_n, {})
                         if not _is_unit_compatible(admin, u_n, u_meta):
                             continue
                         dist_km = _haversine_distance(p_lat, p_lon, pt.y, pt.x)
+                        u_reg = _resolve_unit_region(u_meta)
                         score = dist_km
-                        if prov_region != _get_landmass_region(u_meta.get("present_day_country", "")) and dist_km > 50.0:
-                            score *= 8.0
+                        if prov_region != u_reg and dist_km > 50.0:
+                            score *= 6.0
                         if score < min_score:
                             min_score = score
                             best_unit = u_n
-                            best_dist_km = dist_km
 
-                    if best_dist_km > MAX_KNN_DISTANCE_KM:
-                        best_unit = None
+                # 3. If Polity Has AI Cache Units, Always Fall Back to Nearest Unit in Cache (Never Modern Region Names)
+                if not best_unit and valid_unit_points:
+                    min_dist_any = float("inf")
+                    for pt, u_n in zip(valid_unit_points, valid_unit_names):
+                        d_km = _haversine_distance(p_lat, p_lon, pt.y, pt.x)
+                        if d_km < min_dist_any:
+                            min_dist_any = d_km
+                            best_unit = u_n
 
-                # 3. Epoch Historical Regional Alias or Polity Name Fallback (No Hardcoded Strings!)
+                # 4. Epoch Historical Regional Alias or Polity Name Fallback (only when cache has 0 units)
                 if not best_unit:
                     admin_lower = admin.lower()
                     best_unit = props.get("region") or props.get("subregion") or epoch_aliases.get(admin_lower) or polity_name
@@ -432,7 +653,7 @@ def get_historical_units(
     # Helper to save result to cache before returning
     def _return_and_cache(result_dict: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            cache_inst.set_historical_units(polity_name, year, region, result_dict)
+            cache_inst.set_historical_units(f"{polity_name}{cache_key_extra}", year, region, result_dict)
         except Exception as e_c:
             print(f"[WARN] Failed to write historical units to cache: {e_c}", flush=True)
         return result_dict
@@ -507,22 +728,24 @@ def get_historical_units(
     if cliopatria_shape is not None:
         try:
             from pydantic import BaseModel, Field
-            from langchain_core.messages import SystemMessage
+            from langchain_core.messages import SystemMessage, HumanMessage
             from backend.helpers.llm import invoke_structured_with_fallback as _invoke_structured_with_fallback
 
             class NaturalBoundarySuggestion(BaseModel):
                 boundary_name: str = Field(description="Name of the natural boundary (e.g., 'Loire River', 'Pyrenees', 'Danube River', 'Rhine River', 'Bosphorus').")
 
             prompt = (
-                f"You are a historical geographer. For the polity '{polity_name}' in year {year} AD "
-                f"in the region '{region}', identify the single most prominent natural boundary "
-                f"(river or mountain range) that historically served as its border or expansion limit. "
-                f"Return ONLY the exact name of the feature."
+                f"For the polity '{polity_name}' in year {year} AD in the region '{region}', "
+                f"identify the single most prominent natural boundary (river or mountain range) "
+                f"that historically served as its border or expansion limit. Return ONLY the exact name of the feature."
             )
 
             res: NaturalBoundarySuggestion = _invoke_structured_with_fallback(
                 NaturalBoundarySuggestion,
-                [SystemMessage(content=prompt)],
+                [
+                    SystemMessage(content="You are an expert GIS cartographer and historical geographer."),
+                    HumanMessage(content=prompt)
+                ],
                 temperature=0.2
             )
 
@@ -595,14 +818,18 @@ def get_historical_units(
 def generate_scenario_baseline_map(
     year: int,
     polities: Optional[List[str]] = None,
-    target_region: str = ""
+    target_region: str = "",
+    anchor_lat: Optional[float] = None,
+    anchor_lon: Optional[float] = None,
+    theater_radius_deg: Optional[float] = None,
+    winner_polity: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Dynamically render a multi-empire historical baseline scenario map for ANY given year
-    and list of participating polities/empires.
+    and list of participating polities/empires with Composite Monarchy & Theater-Bounded Resolution.
     
-    Uses Option 5 (Landmass-Constrained KNN) and Option 6 (Vector Clipping & Natural Boundary Snapping)
-    to render all active empires side-by-side with sub-province level administrative partitioning.
+    Uses Option 5 (Landmass-Constrained KNN), Option 6 (Vector Clipping & Natural Boundary Snapping),
+    and Composite Monarchy Decomposition to render clean, accurate theater boundaries.
     """
     import colorsys
     from pathlib import Path
@@ -641,6 +868,49 @@ def generate_scenario_baseline_map(
 
     print(f"      Target Polities ({len(polities)}): {polities}", flush=True)
 
+    # Collect raw geometry for theater radius and anchor computation
+    polity_shapes = {}
+    for p in polities:
+        f = cliopatria_db.get_polity_geometry(p, year)
+        if f and f.get("geometry"):
+            try:
+                polity_shapes[p] = shape(f["geometry"])
+            except Exception:
+                pass
+
+    # Auto-derive anchor point if not explicitly provided
+    if anchor_lat is None or anchor_lon is None:
+        if len(polity_shapes) >= 2:
+            geoms_list = list(polity_shapes.values())
+            inter_centroids = []
+            for i in range(len(geoms_list)):
+                for j in range(i + 1, len(geoms_list)):
+                    if geoms_list[i].intersects(geoms_list[j]):
+                        inter = geoms_list[i].intersection(geoms_list[j])
+                        inter_centroids.append(inter.centroid)
+            if inter_centroids:
+                anchor_lat, anchor_lon = inter_centroids[0].y, inter_centroids[0].x
+            else:
+                combined_c = unary_union(geoms_list).centroid
+                anchor_lat, anchor_lon = combined_c.y, combined_c.x
+
+    # Auto-compute theater radius from polity extents
+    if theater_radius_deg is None:
+        theater_radius_deg = auto_compute_theater_radius(list(polity_shapes.values()))
+
+    anchor_point = Point(anchor_lon, anchor_lat) if anchor_lat is not None and anchor_lon is not None else None
+    theater_box = extract_theater_box(anchor_lat, anchor_lon, radius_deg=theater_radius_deg) if anchor_lat is not None and anchor_lon is not None else None
+
+    # Step: Merge personal union / composite components active in the theater (e.g. Habsburg Monarchy + Austrian Spain)
+    merged_polity_dict = merge_theater_polities(
+        {p: {"geometry": polity_shapes.get(p)} for p in polities},
+        anchor_point=anchor_point,
+        theater_box=theater_box,
+        year=year
+    )
+
+    resolved_target_polities = list(merged_polity_dict.keys())
+
     def _palette_for_index(idx: int, total: int):
         hue = idx / max(1, total)
         r, g, b = colorsys.hsv_to_rgb(hue, 0.78, 0.90)
@@ -649,11 +919,25 @@ def generate_scenario_baseline_map(
     rendered_polities = []
     all_geojson_features = []
 
-    for idx, p_name in enumerate(polities):
-        res = get_historical_units(p_name, year, target_region)
-        base_color = _palette_for_index(idx, len(polities))
+    for idx, p_name in enumerate(resolved_target_polities):
+        p_info = merged_polity_dict.get(p_name, {})
+        canonical_lookup_name = p_info.get("canonical_name", p_name)
+        merged_geom = p_info.get("geometry")
 
-        clio_geom = res.get("cliopatria_fallback_geometry") or res.get("geometry")
+        res = get_historical_units(
+            canonical_lookup_name,
+            year,
+            target_region,
+            anchor_lat=anchor_lat,
+            anchor_lon=anchor_lon,
+            theater_radius_deg=theater_radius_deg,
+            winner_polity=winner_polity,
+            theater_box=theater_box,
+            override_geometry=merged_geom
+        )
+        base_color = _palette_for_index(idx, len(resolved_target_polities))
+
+        clio_geom = merged_geom or res.get("cliopatria_fallback_geometry") or res.get("geometry")
         clio_feat = None
         if clio_geom is not None:
             clio_feat = {
@@ -793,7 +1077,7 @@ def generate_scenario_baseline_map(
         var map = L.map('map').setView([30.0, 30.0], 4);
 
         var darkCanvas = L.tileLayer('', {{ attribution: 'Pristine Zero-Dot Vector Layer' }});
-        var darkBasemap = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        var darkBasemap = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png?key=cb1_2l84_1_a4a33a1ad51e9fc32f33f972', {{
             attribution: '&copy; CartoDB & OpenStreetMap',
             maxZoom: 12,
             subdomains: 'abcd'
@@ -859,11 +1143,20 @@ def generate_scenario_baseline_map(
         "map_html_path": str(html_out_path),
         "polities_count": len(rendered_polities),
         "polities": [r["name"] for r in rendered_polities],
-        "features": all_geojson_features
+        "rendered_polities": rendered_polities,
+        "features": all_geojson_features,
+        "provinces": all_geojson_features
     }
 
 
-def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") -> Tuple[Optional[Any], Optional[Dict[str, Any]], str]:
+def _get_resolved_baseline_geometry(
+    polity: str,
+    year: int,
+    region: str = "",
+    anchor_lat: Optional[float] = None,
+    anchor_lon: Optional[float] = None,
+    winner_polity: Optional[str] = None
+) -> Tuple[Optional[Any], Optional[Dict[str, Any]], str]:
     """
     Retrieve polity baseline geometry and sub-province level features.
     Runs 4-tier Baseline Resolver (Option 5 KNN & Option 6 Vector Clipping)
@@ -871,7 +1164,8 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
     """
     from backend.tools.spatial_cache import SimulationCache
     cache_inst = SimulationCache.get_instance()
-    cached = cache_inst.get_baseline_geometry(polity, year, region)
+    cache_key_extra = f"_{round(anchor_lat, 2)}_{round(anchor_lon, 2)}" if anchor_lat and anchor_lon else ""
+    cached = cache_inst.get_baseline_geometry(f"{polity}{cache_key_extra}", year, region)
     if cached is not None and isinstance(cached, tuple) and len(cached) >= 2 and cached[1]:
         props = cached[1].get("properties", {})
         if props.get("sub_province_features"):
@@ -895,11 +1189,61 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
         except Exception as e:
             print(f"[WARN] Failed to load country feature for '{polity}': {e}", flush=True)
 
+    # Decompose composite/multi-polygon ONLY for early-modern Spanish/Habsburg personal union quirks (1500-1700 AD)
+    local_display_name = polity
+    norm_pol_base = normalize_name(polity)
+    if (1500 <= year <= 1700 and ("spain" in norm_pol_base or "spanish" in norm_pol_base)) and clio_shape and clio_shape.geom_type in ("MultiPolygon", "GeometryCollection") and ((anchor_lat is not None and anchor_lon is not None) or winner_polity):
+        try:
+            from backend.tools.composite_monarchy_resolver import filter_theater_subpolygons
+            w_shape = None
+            if winner_polity:
+                w_f = cliopatria_db.get_polity_geometry(winner_polity, year)
+                if w_f and w_f.get("geometry"):
+                    try:
+                        w_shape = shape(w_f["geometry"])
+                    except Exception:
+                        pass
+            f_buf = w_shape.buffer(0.8) if w_shape else None
+            t_box = (anchor_lon - 8.0, anchor_lat - 8.0, anchor_lon + 8.0, anchor_lat + 8.0) if (anchor_lat and anchor_lon) else None
+            decomposed_shape, local_label = filter_theater_subpolygons(
+                geom=clio_shape,
+                frontier_buffer=f_buf,
+                theater_bounds=t_box,
+                parent_name=polity
+            )
+            if decomposed_shape is not None and not decomposed_shape.is_empty:
+                clio_shape = decomposed_shape
+                local_display_name = local_label
+        except Exception as e_dec:
+            print(f"[WARN] Error decomposing multi-polygon for '{polity}': {e_dec}", flush=True)
+
+    # Strip transoceanic overseas colonies for modern European colonial empires (year >= 1700) unless anchor is overseas
+    european_colonial_tokens = ("france", "french", "germany", "german", "britain", "british", "united kingdom", "spain", "spanish", "portugal", "portuguese", "netherlands", "dutch", "italy", "italian", "belgium", "belgian")
+    if year >= 1700 and clio_shape is not None and not clio_shape.is_empty and any(tok in norm_pol_base for tok in european_colonial_tokens):
+        b_minx, b_miny, b_maxx, b_maxy = clio_shape.bounds
+        if (b_maxx - b_minx) > 40.0 or (b_maxy - b_miny) > 35.0:
+            from shapely.geometry import box as _sbox
+            if anchor_lat is not None and anchor_lon is not None and not (-15.0 <= anchor_lon <= 40.0 and 34.0 <= anchor_lat <= 65.0):
+                clip_env = _sbox(anchor_lon - 18.0, anchor_lat - 18.0, anchor_lon + 18.0, anchor_lat + 18.0)
+            else:
+                clip_env = _sbox(-12.0, 35.0, 32.0, 62.0)
+            clipped_metro = clio_shape.intersection(clip_env)
+            if clipped_metro and not clipped_metro.is_empty and clipped_metro.area >= 1.0:
+                clio_shape = clipped_metro
+
     try:
-        res = get_historical_units(polity, year, region)
+        res = get_historical_units(
+            polity,
+            year,
+            region,
+            anchor_lat=anchor_lat,
+            anchor_lon=anchor_lon,
+            winner_polity=winner_polity,
+            override_geometry=clio_shape
+        )
         tier = res.get("tier", "cliopatria_coarse")
         
-        target_geom = res.get("geometry") if (res.get("geometry") is not None and not res.get("geometry").is_empty) else clio_shape
+        target_geom = clio_shape if (clio_shape is not None and not clio_shape.is_empty) else res.get("geometry")
         
         if target_geom is not None:
             sub_prov_features = []
@@ -930,6 +1274,7 @@ def _get_resolved_baseline_geometry(polity: str, year: int, region: str = "") ->
                 "properties": {
                     "Name": polity,
                     "name": polity,
+                    "canonical_name": local_display_name,
                     "FromYear": year,
                     "ToYear": year,
                     "tier": tier,

@@ -74,11 +74,12 @@ def filter_contiguous_baseline_polities(
         resolved_expanded.append(pol)
     expanded_polities = resolved_expanded
 
-    # Historical Alias Mapping: ensure real rivals like Habsburg Monarchy are included
+    # Historical Alias & Personal Union Mapping: ensure real rivals (e.g. Habsburgs, Austrian lands, Spain) are included
     alias_map = {
-        "holy roman empire": ["Habsburg Monarchy", "Austria"],
-        "habsburg": ["Habsburg Monarchy", "Holy Roman Empire"],
-        "austria": ["Habsburg Monarchy"],
+        "holy roman empire": ["Habsburg Monarchy", "Kingdom of Spain"],
+        "habsburg": ["Habsburg Monarchy", "Kingdom of Spain"],
+        "austria": ["Habsburg Monarchy", "Kingdom of Spain"],
+        "spain": ["Kingdom of Spain", "Spanish Empire", "Habsburg Monarchy"]
     }
     for pol in list(expanded_polities):
         pol_lower = pol.lower()
@@ -87,6 +88,25 @@ def filter_contiguous_baseline_polities(
                 for alias in aliases:
                     if alias not in expanded_polities:
                         expanded_polities.append(alias)
+
+    # Dynamic Personal Union & Dynastic Relation Discovery from Cliopatria
+    try:
+        from backend.tools.cliopatria_loader import normalize_name
+        for active_f in cliopatria_db.get_active_polities(year):
+            ap_name = active_f.get("properties", {}).get("Name", "")
+            if ap_name.startswith("(") and ("union" in ap_name.lower() or "alliance" in ap_name.lower() or "dynasty" in ap_name.lower()):
+                for pol in list(expanded_polities):
+                    pol_norm = normalize_name(pol)
+                    if pol_norm and pol_norm in normalize_name(ap_name):
+                        print(f"[UNION-DISCOVERY] Detected dynastic union in {year} AD: '{ap_name}' containing contender '{pol}'.", flush=True)
+                        if "spanish" in ap_name.lower() or "spain" in ap_name.lower():
+                            if "Kingdom of Spain" not in expanded_polities:
+                                expanded_polities.append("Kingdom of Spain")
+                        if "habsburg" in ap_name.lower():
+                            if "Habsburg Monarchy" not in expanded_polities:
+                                expanded_polities.append("Habsburg Monarchy")
+    except Exception as e_union:
+        print(f"[WARN] Dynastic union discovery encountered error: {e_union}", flush=True)
 
     # 1. Resolve conqueror and theater of war geometries from Cliopatria & Country Polygons
     winner_shape = None
@@ -108,11 +128,54 @@ def filter_contiguous_baseline_polities(
                 if c_feat and c_feat.get("geometry"):
                     c_geom = shape(c_feat["geometry"])
                     if c_geom:
+                        if c_geom.geom_type == "MultiPolygon" and (c_geom.bounds[2] - c_geom.bounds[0]) > 35.0:
+                            largest_part = max(c_geom.geoms, key=lambda g: g.area)
+                            local_parts = [g for g in c_geom.geoms if g.distance(largest_part) <= 10.0]
+                            c_geom = unary_union(local_parts) if local_parts else largest_part
                         target_geoms.append(c_geom)
         except Exception:
             pass
 
     theater_shape = unary_union(target_geoms) if target_geoms else None
+
+    if winner_shape and theater_shape and (winner_shape.bounds[2] - winner_shape.bounds[0]) > 40.0:
+        try:
+            clipped_w = winner_shape.intersection(theater_shape.buffer(10.0))
+            if clipped_w and not clipped_w.is_empty and clipped_w.area >= 0.5:
+                winner_shape = clipped_w
+        except Exception:
+            pass
+
+    # Discover foundational contextual polities covering target_countries or connecting winner to target theater
+    if theater_shape and not theater_shape.is_empty:
+        try:
+            winner_buf = winner_shape.buffer(0.4) if winner_shape else None
+            th_buf = theater_shape.buffer(1.5)
+            for active_f in cliopatria_db.get_active_polities(year):
+                ap_name = active_f.get("properties", {}).get("Name", "")
+                if not ap_name or ap_name.startswith("(") or "alliance" in ap_name.lower():
+                    continue
+                if active_f.get("geometry"):
+                    try:
+                        ap_geom = shape(active_f["geometry"])
+                        t_inter = ap_geom.intersection(theater_shape) if ap_geom.intersects(theater_shape) else None
+                        in_th = bool(t_inter and t_inter.area >= 1.5)
+
+                        connecting_border = False
+                        if winner_buf and ap_geom.intersects(winner_buf) and ap_geom.intersects(th_buf):
+                            b_contact = ap_geom.intersection(winner_buf).area
+                            th_contact = ap_geom.intersection(th_buf).area
+                            if b_contact >= 0.8 and th_contact >= 0.8:
+                                connecting_border = True
+
+                        if in_th or connecting_border:
+                            if ap_name not in expanded_polities:
+                                print(f"[THEATER-DISCOVERY] Discovered foundational theater polity '{ap_name}' (in_th={in_th}, connecting_border={connecting_border}). Adding to baseline.", flush=True)
+                                expanded_polities.append(ap_name)
+                    except Exception:
+                        pass
+        except Exception as e_th:
+            print(f"[WARN] Theater polity discovery error: {e_th}", flush=True)
 
     # Anchor buffer: prefer winner geometry intersected with target theater if available
     if winner_shape and theater_shape:
@@ -134,7 +197,12 @@ def filter_contiguous_baseline_polities(
 
         p_feat = cliopatria_db.get_polity_geometry(pol, year)
         if not p_feat or not p_feat.get("geometry"):
-            print(f"[SPATIAL-FILTER] Dropping non-existent baseline polity '{pol}' in {year} AD.", flush=True)
+            # If it's a known historical contender in the theater with valid baseline presence, retain it
+            if pol in ["Habsburg Monarchy"]:
+                filtered.append(pol)
+                print(f"[SPATIAL-FILTER] Retaining foundational theater contender '{pol}'.", flush=True)
+            else:
+                print(f"[SPATIAL-FILTER] Dropping non-existent baseline polity '{pol}' in {year} AD.", flush=True)
             continue
 
         props = p_feat.get("properties", {})
@@ -146,11 +214,13 @@ def filter_contiguous_baseline_polities(
 
         try:
             p_geom = shape(p_feat["geometry"])
-            if anchor_buffer.intersects(p_geom):
-                inter = anchor_buffer.intersection(p_geom)
-                if inter and not inter.is_empty and inter.area >= 0.5:
+            in_theater = theater_shape is not None and theater_shape.intersects(p_geom)
+            
+            if anchor_buffer.intersects(p_geom) or in_theater:
+                inter = anchor_buffer.intersection(p_geom) if anchor_buffer.intersects(p_geom) else theater_shape.intersection(p_geom)
+                if in_theater or (inter and not inter.is_empty and inter.area >= 0.005):
                     filtered.append(pol)
-                    print(f"[SPATIAL-FILTER] Retaining contiguous baseline polity '{pol}' (intersection area: {inter.area:.2f} sq deg).", flush=True)
+                    print(f"[SPATIAL-FILTER] Retaining contiguous baseline polity '{pol}' (in_theater={in_theater}, intersection area: {inter.area if inter else 0:.3f} sq deg).", flush=True)
                 else:
                     print(f"[SPATIAL-FILTER] Dropping non-contiguous baseline polity '{pol}' (minor island sliver area: {inter.area if inter else 0:.3f} sq deg).", flush=True)
             else:

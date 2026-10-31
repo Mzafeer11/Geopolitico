@@ -69,6 +69,11 @@ REGIONAL_HISTORICAL_DEFAULTS = {
 
 class DemographicShiftPlan(BaseModel):
     prompt_explanation: str = Field(description="Detailed explanation of the demographic shift, base year, target percentages, and spatial distribution logic.")
+    target_group: str = Field(default="Muslims", description="The ethnic, religious, or linguistic group undergoing the shift (e.g., 'Muslims', 'Kurds', 'Serbs', 'Hungarians').")
+    target_countries: List[str] = Field(default_factory=list, description="Modern country names covering the theater of the demographic shift.")
+    majority_state_name: str = Field(default="New Pakistan", description="Name of the polity formed by >=50% majority areas of target_group.")
+    remainder_state_name: str = Field(default="New India", description="Name of the polity formed by <50% remainder areas.")
+    baseline_polity_name: str = Field(default="British India", description="Name of the undivided baseline territory before demographic partition.")
     target_percentage: float = Field(default=60.0, description="Overall target percentage across the region.")
     spatial_alpha: float = Field(default=0.70, description="Spatial weight for local vs neighbor blend.")
     extracted_year: Optional[int] = Field(default=None, description="The base year extracted from the user's prompt (e.g. 1947, 1946, 1941).")
@@ -239,121 +244,154 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
 
     target_pct = plan.target_percentage
     alpha = plan.spatial_alpha
+    target_group = plan.target_group or "Muslims"
 
-    pak_features = load_gadm_geojson(PAK_GADM)
-    bgd_features = load_bangladesh_features()
-    ind_features = load_gadm_geojson(IND_GADM)
+    # Determine target countries from planner context or DemographicShiftPlan
+    ctx_countries = context.get("target_countries") or []
+    plan_countries = plan.target_countries or []
+    effective_countries = list(dict.fromkeys(plan_countries + ctx_countries))
 
-    unit_lookup, prov_lookup, pop_lookup = load_census_lookups()
+    scen_low = scenario.lower()
+    is_south_asia_partition = (
+        not effective_countries
+        or any(k in scen_low for k in ["india", "pakistan", "bengal", "punjab", "radcliffe", "1947", "1941"])
+        or set(c.lower() for c in effective_countries).issubset({"india", "pakistan", "bangladesh", "british india"})
+    )
 
-    all_raw_features = []
-    for f in pak_features:
-        f["_country"] = "Pakistan"
-        all_raw_features.append(f)
-    for f in bgd_features:
-        f["_country"] = "Bangladesh"
-        all_raw_features.append(f)
-    for f in ind_features:
-        f["_country"] = "India"
-        all_raw_features.append(f)
+    if is_south_asia_partition:
+        maj_state_name = "New Pakistan"
+        rem_state_name = "New India"
+        base_pol_name = "British India"
+        pak_features = load_gadm_geojson(PAK_GADM)
+        bgd_features = load_bangladesh_features()
+        ind_features = load_gadm_geojson(IND_GADM)
 
-    processed_items = []
-    total_area = 0.0
-    weighted_baseline_sum = 0.0
+        unit_lookup, prov_lookup, pop_lookup = load_census_lookups()
 
-    for feat in all_raw_features:
-        props = feat.get("properties", {})
-        cname = feat["_country"]
-        raw_p = props.get("NAME_1", "Unknown").strip()
-        raw_d = props.get("NAME_2", props.get("NAME_1", "Unknown")).strip()
+        all_raw_features = []
+        for f in pak_features:
+            f["_country"] = "Pakistan"
+            all_raw_features.append(f)
+        for f in bgd_features:
+            f["_country"] = "Bangladesh"
+            all_raw_features.append(f)
+        for f in ind_features:
+            f["_country"] = "India"
+            all_raw_features.append(f)
 
-        norm_p = split_pascal(raw_p).lower()
-        norm_d = split_pascal(raw_d).lower()
+        processed_items = []
+        total_area = 0.0
+        weighted_baseline_sum = 0.0
 
-        alias_p = STATE_ALIASES.get(raw_p.lower(), STATE_ALIASES.get(norm_p, norm_p))
-        alias_d = DISTRICT_ALIASES.get(raw_d.lower(), DISTRICT_ALIASES.get(norm_d, norm_d))
+        for feat in all_raw_features:
+            props = feat.get("properties", {})
+            cname = feat["_country"]
+            raw_p = props.get("NAME_1", "Unknown").strip()
+            raw_d = props.get("NAME_2", props.get("NAME_1", "Unknown")).strip()
 
-        clean_d = clean_norm(norm_d)
-        clean_alias_d = clean_norm(alias_d)
-        clean_p = clean_norm(norm_p)
-        clean_alias_p = clean_norm(alias_p)
+            norm_p = split_pascal(raw_p).lower()
+            norm_d = split_pascal(raw_d).lower()
 
-        try:
-            geom_shape = shape(feat["geometry"])
-            area = geom_shape.area
-        except Exception:
-            continue
+            alias_p = STATE_ALIASES.get(raw_p.lower(), STATE_ALIASES.get(norm_p, norm_p))
+            alias_d = DISTRICT_ALIASES.get(raw_d.lower(), DISTRICT_ALIASES.get(norm_d, norm_d))
 
-        matched_pct = None
-        match_source = "country_fallback"
-        is_fallback = False
+            clean_d = clean_norm(norm_d)
+            clean_alias_d = clean_norm(alias_d)
+            clean_p = clean_norm(norm_p)
+            clean_alias_p = clean_norm(alias_p)
 
-        if norm_d in unit_lookup:
-            matched_pct = unit_lookup[norm_d]
-            match_source = "exact_district_csv"
-        elif clean_d in unit_lookup:
-            matched_pct = unit_lookup[clean_d]
-            match_source = "exact_district_csv"
-        elif clean_alias_d in unit_lookup:
-            matched_pct = unit_lookup[clean_alias_d]
-            match_source = "exact_district_csv"
-        elif alias_d in unit_lookup:
-            matched_pct = unit_lookup[alias_d]
-            match_source = "exact_district_csv"
-        else:
-            for u_k, u_v in unit_lookup.items():
-                if len(u_k) > 3 and (u_k in clean_alias_d or clean_alias_d in u_k or u_k in clean_d or clean_d in u_k):
-                    matched_pct = u_v
-                    match_source = "substring_district_csv"
-                    break
+            try:
+                geom_shape = shape(feat["geometry"])
+                area = geom_shape.area
+            except Exception:
+                continue
 
-        if matched_pct is None:
-            if clean_alias_p in prov_lookup:
-                matched_pct = prov_lookup[clean_alias_p]
-                match_source = "province_csv"
-            elif clean_p in prov_lookup:
-                matched_pct = prov_lookup[clean_p]
-                match_source = "province_csv"
-            elif alias_p in prov_lookup:
-                matched_pct = prov_lookup[alias_p]
-                match_source = "province_csv"
-            elif norm_p in prov_lookup:
-                matched_pct = prov_lookup[norm_p]
-                match_source = "province_csv"
-            elif "kashmir" in alias_p and "kashmir" in prov_lookup:
-                matched_pct = prov_lookup["kashmir"]
-                match_source = "province_csv"
-            elif alias_p in REGIONAL_HISTORICAL_DEFAULTS:
-                matched_pct = REGIONAL_HISTORICAL_DEFAULTS[alias_p]
-                match_source = "regional_default"
-            elif norm_p in REGIONAL_HISTORICAL_DEFAULTS:
-                matched_pct = REGIONAL_HISTORICAL_DEFAULTS[norm_p]
-                match_source = "regional_default"
+            matched_pct = None
+            match_source = "country_fallback"
+            is_fallback = False
+
+            if norm_d in unit_lookup:
+                matched_pct = unit_lookup[norm_d]
+                match_source = "exact_district_csv"
+            elif clean_d in unit_lookup:
+                matched_pct = unit_lookup[clean_d]
+                match_source = "exact_district_csv"
+            elif clean_alias_d in unit_lookup:
+                matched_pct = unit_lookup[clean_alias_d]
+                match_source = "exact_district_csv"
+            elif alias_d in unit_lookup:
+                matched_pct = unit_lookup[alias_d]
+                match_source = "exact_district_csv"
             else:
-                is_fallback = True
-                match_source = "country_fallback"
-                matched_pct = 78.5 if cname == "Pakistan" else (70.3 if cname == "Bangladesh" else 15.0)
+                for u_k, u_v in unit_lookup.items():
+                    if len(u_k) > 3 and (u_k in clean_alias_d or clean_alias_d in u_k or u_k in clean_d or clean_d in u_k):
+                        matched_pct = u_v
+                        match_source = "substring_district_csv"
+                        break
 
-        pop_est = pop_lookup.get(alias_d, pop_lookup.get(norm_d, pop_lookup.get(alias_p, pop_lookup.get(norm_p, None))))
-        if pop_est is None or pop_est <= 0:
-            pop_est = max(50000.0, area * 50000.0)
+            if matched_pct is None:
+                if clean_alias_p in prov_lookup:
+                    matched_pct = prov_lookup[clean_alias_p]
+                    match_source = "province_csv"
+                elif clean_p in prov_lookup:
+                    matched_pct = prov_lookup[clean_p]
+                    match_source = "province_csv"
+                elif alias_p in prov_lookup:
+                    matched_pct = prov_lookup[alias_p]
+                    match_source = "province_csv"
+                elif norm_p in prov_lookup:
+                    matched_pct = prov_lookup[norm_p]
+                    match_source = "province_csv"
+                elif "kashmir" in alias_p and "kashmir" in prov_lookup:
+                    matched_pct = prov_lookup["kashmir"]
+                    match_source = "province_csv"
+                elif alias_p in REGIONAL_HISTORICAL_DEFAULTS:
+                    matched_pct = REGIONAL_HISTORICAL_DEFAULTS[alias_p]
+                    match_source = "regional_default"
+                elif norm_p in REGIONAL_HISTORICAL_DEFAULTS:
+                    matched_pct = REGIONAL_HISTORICAL_DEFAULTS[norm_p]
+                    match_source = "regional_default"
+                else:
+                    is_fallback = True
+                    match_source = "country_fallback"
+                    matched_pct = 78.5 if cname == "Pakistan" else (70.3 if cname == "Bangladesh" else 15.0)
 
-        total_area += area
-        weighted_baseline_sum += (matched_pct * area)
+            pop_est = pop_lookup.get(alias_d, pop_lookup.get(norm_d, pop_lookup.get(alias_p, pop_lookup.get(norm_p, None))))
+            if pop_est is None or pop_est <= 0:
+                pop_est = max(50000.0, area * 50000.0)
 
-        processed_items.append({
-            "feature": feat,
-            "shape": geom_shape,
-            "area": area,
-            "baseline_pct": matched_pct,
-            "current_pct": matched_pct,
-            "population": pop_est,
-            "match_source": match_source,
-            "is_fallback": is_fallback,
-            "country": cname,
-            "province": raw_p,
-            "district": raw_d
-        })
+            total_area += area
+            weighted_baseline_sum += (matched_pct * area)
+
+            processed_items.append({
+                "feature": feat,
+                "shape": geom_shape,
+                "area": area,
+                "baseline_pct": matched_pct,
+                "current_pct": matched_pct,
+                "population": pop_est,
+                "match_source": match_source,
+                "is_fallback": is_fallback,
+                "country": cname,
+                "province": raw_p,
+                "district": raw_d
+            })
+    else:
+        maj_state_name = plan.majority_state_name or f"New {target_group} Majority State"
+        rem_state_name = plan.remainder_state_name or "Remaining Territory"
+        base_pol_name = plan.baseline_polity_name or ", ".join(effective_countries)
+        from backend.tools.global_demographics import GlobalDemographicsLoader
+        g_loader = GlobalDemographicsLoader.get_instance()
+        processed_items, g_meta = g_loader.build_harmonized_subnational_baselines(
+            target_countries=effective_countries,
+            target_group=target_group,
+            year=base_year
+        )
+        print(
+            f"[DEMOGRAPHIC ENGINE] Harmonized {len(processed_items)} global subnational units across "
+            f"{g_meta.get('countries_loaded')} using GeoEPR/EPR/WRP datasets (Matched EPR groups: {g_meta.get('matched_epr_groups')}).",
+            flush=True
+        )
 
     # Mathematical Formula Implementation from run_full_gadm_simulation.py
     num_items = len(processed_items)
@@ -476,12 +514,15 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
         if ms in ["exact_district_csv", "substring_district_csv"]:
             audit_color = "#3b82f6"
             audit_label = "Exact/Substring District CSV"
-        elif ms == "province_csv":
+        elif ms == "geoepr_settlement_polygon":
+            audit_color = "#3b82f6"
+            audit_label = "GeoEPR Settlement Polygon (ETH Zurich)"
+        elif ms in ["province_csv", "geoepr_outside_settlement"]:
             audit_color = "#8b5cf6"
-            audit_label = "1941 Parent Province CSV"
-        elif ms == "regional_default":
+            audit_label = "1941 Parent Province CSV" if ms == "province_csv" else "GeoEPR Non-Settlement Baseline"
+        elif ms in ["regional_default", "epr_wrp_national_baseline"]:
             audit_color = "#eab308"
-            audit_label = "Regional Default"
+            audit_label = "Regional Default" if ms == "regional_default" else "EPR / WRP National Demographic Baseline"
         else:
             audit_color = "#ef4444"
             audit_label = "Country Baseline Fallback"
@@ -514,7 +555,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
         "type": "Feature",
         "geometry": mapping(subcontinent_union),
         "properties": {
-            "name": "British India Baseline Territory",
+            "name": f"{base_pol_name} Baseline Territory",
             "color": "#d97706",
             "fill": "#d97706",
             "fillOpacity": 0.45,
@@ -532,7 +573,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "type": "Feature",
             "geometry": mapping(pak_union_real),
             "properties": {
-                "name": "New Pakistan (Realistic Majority Partition)",
+                "name": f"{maj_state_name} (Realistic Majority Partition)",
                 "color": "#10b981",
                 "fill": "#10b981",
                 "fillOpacity": 0.55,
@@ -545,7 +586,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "type": "Feature",
             "geometry": mapping(ind_union_real),
             "properties": {
-                "name": "New India (Realistic Majority Partition)",
+                "name": f"{rem_state_name} (Realistic Majority Partition)",
                 "color": "#f97316",
                 "fill": "#f97316",
                 "fillOpacity": 0.55,
@@ -643,7 +684,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "type": "Feature",
             "geometry": mapping(pak_union_opt),
             "properties": {
-                "name": "New Pakistan (100% Contiguous State Landmass)",
+                "name": f"{maj_state_name} (100% Contiguous State Landmass)",
                 "color": "#059669",
                 "fill": "#059669",
                 "fillOpacity": 0.60,
@@ -656,7 +697,7 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "type": "Feature",
             "geometry": mapping(ind_union_opt),
             "properties": {
-                "name": "New India (100% Contiguous State Landmass)",
+                "name": f"{rem_state_name} (100% Contiguous State Landmass)",
                 "color": "#ea580c",
                 "fill": "#ea580c",
                 "fillOpacity": 0.60,
@@ -667,14 +708,14 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
 
     final_results = {
         "scenario_mode": "demographic",
-        "title": f"Demographic Shift & State Partition ({base_year} AD Baseline)",
-        "alternate_outcome": f"Under this {target_pct}% demographic shift model, high-concentration corridors across northern India establish a contiguous sovereign landmass connecting West Pakistan and East Pakistan.",
+        "title": f"Demographic Shift & State Partition: {maj_state_name} vs {rem_state_name} ({base_year} AD)",
+        "alternate_outcome": plan.prompt_explanation or f"Under this {target_pct}% demographic shift model for {target_group}, high-concentration corridors establish a contiguous sovereign landmass for {maj_state_name}.",
         "key_changes": [
-            f"Base Year Census Baseline: {base_year} AD",
-            f"Target Demographic Concentration: {target_pct}%",
+            f"Base Year Demographic Baseline: {base_year} AD",
+            f"Target Group & Concentration: {target_group} ({target_pct}%)",
             f"Spatial Scaling & Neighbor Blend (Alpha): {alpha}",
-            f"Realistic Partition Threshold: 50% majority cut",
-            f"Optimistic Partition Model: High-Minority Northern Land Corridor (100% Contiguous State)"
+            f"Realistic Partition Threshold: 50% majority cut ({maj_state_name})",
+            f"Optimistic Partition Model: Contiguous High-Concentration Land Corridor (100% Enclave-Free State)"
         ],
         "butterfly_effects": [
             "Demographic shifts alter regional electoral and economic centers.",
@@ -702,18 +743,22 @@ def run_demographic_simulation(context: Dict[str, Any]) -> Dict[str, Any]:
             "features": optimistic_features
         },
         "territories_before": [
-            {"name": "British India", "status": "baseline", "color": "#d97706", "description": "1941 Census Undivided British India Territory"}
+            {"name": base_pol_name, "status": "baseline", "color": "#d97706", "description": f"{base_year} AD Undivided {base_pol_name} Territory"}
         ],
         "territories_after_realistic": [
-            {"name": "New Pakistan", "status": "direct_control", "color": "#10b981", "description": "Realistic 50%+ Majority Partition Boundary"},
-            {"name": "New India", "status": "direct_control", "color": "#f97316", "description": "Realistic Non-Muslim Majority Partition Boundary"}
+            {"name": maj_state_name, "status": "direct_control", "color": "#10b981", "description": f"Realistic 50%+ {target_group} Majority Partition Boundary"},
+            {"name": rem_state_name, "status": "direct_control", "color": "#f97316", "description": f"Realistic Non-{target_group} Majority Partition Boundary"}
         ],
         "territories_after_optimistic": [
-            {"name": "New Pakistan", "status": "direct_control", "color": "#059669", "description": "Optimistic 100% Contiguous State Corridor"},
-            {"name": "New India", "status": "direct_control", "color": "#ea580c", "description": "Optimistic 100% Contiguous State Corridor"}
+            {"name": maj_state_name, "status": "direct_control", "color": "#059669", "description": "Optimistic 100% Contiguous State Corridor"},
+            {"name": rem_state_name, "status": "direct_control", "color": "#ea580c", "description": "Optimistic 100% Contiguous State Corridor"}
         ],
-        "historical_context": f"Demographic shift scenario evaluating a {target_pct}% concentration model based on official {base_year} Census of India district records.",
-        "what_actually_happened": "In the historical 1947 Partition of British India, the Radcliffe Line divided Punjab and Bengal, creating West Pakistan and East Pakistan as physically separated wings.",
+        "historical_context": f"Demographic shift scenario evaluating a {target_pct}% concentration model for {target_group} across {base_pol_name} ({base_year} AD).",
+        "what_actually_happened": (
+            "In the historical 1947 Partition of British India, the Radcliffe Line divided Punjab and Bengal, creating West Pakistan and East Pakistan as physically separated wings."
+            if is_south_asia_partition else
+            f"Historical baseline territorial and demographic distribution across {base_pol_name} in {base_year} AD."
+        ),
         "base_year": base_year,
         "confidence_score": 0.92
     }

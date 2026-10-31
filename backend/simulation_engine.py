@@ -13,13 +13,32 @@ from backend.orchestrator.graph_nodes import verification_apply_node as verify_n
 _sessions: Dict[str, Dict[str, Any]] = {}
 
 
-def simulate_start(scenario: str) -> Dict[str, Any]:
+def simulate_start(scenario: str, job_id: str = None) -> Dict[str, Any]:
     """
     Start a geopolitical counterfactual simulation.
     Invokes the pure LangGraph orchestrator graph.
     """
+    import importlib
     from backend.tools.spatial_cache import SimulationCache
     SimulationCache.get_instance().clear()
+
+    # Hot-reload pipeline & orchestrator modules so disk changes apply immediately without restarting uvicorn
+    try:
+        import backend.tools.gis_tools as _m_gis
+        import backend.tools.baseline_resolver as _m_br
+        import backend.tools.compiler as _m_comp
+        import backend.helpers.programmatic_validator as _m_pv
+        import backend.pipelines.partition as _m_part
+        import backend.pipelines.conquest as _m_conq
+        import backend.pipelines.compounding as _m_cmpd
+        import backend.pipelines.demographic as _m_demo
+        import backend.orchestrator.graph_nodes as _m_gn
+        import backend.orchestrator.graph as _m_gr
+        for _mod in (_m_gis, _m_br, _m_comp, _m_pv, _m_part, _m_conq, _m_cmpd, _m_demo, _m_gn, _m_gr):
+            importlib.reload(_mod)
+        active_graph = _m_gr.simulation_graph
+    except Exception:
+        active_graph = simulation_graph
     
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
@@ -27,10 +46,10 @@ def simulate_start(scenario: str) -> Dict[str, Any]:
         "scenario": scenario,
         "raw_scenario": scenario,
         "session_id": session_id,
-        "job_id": session_id
+        "job_id": job_id or session_id
     }
     
-    output_state = simulation_graph.invoke(initial_state, config)
+    output_state = active_graph.invoke(initial_state, config)
     _sessions[session_id] = output_state
     
     status_val = output_state.get("status", "completed")
