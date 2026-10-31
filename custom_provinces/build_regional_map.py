@@ -25,8 +25,8 @@ def main():
     custom_named_path = r'c:\Users\ADMIN\Desktop\Geopolitico\custom_named_provinces_with_capitals.json'
     painted_json_path = r'c:\Users\ADMIN\Desktop\Geopolitico\custom_regional_painted_divisions.json'
 
-    gmba_polys_path = r"C:\Users\ADMIN\.gemini\antigravity-ide\brain\f83657ce-68ad-4fb0-9fed-4aef6c30d42e\scratch\gmba_defense_mountains.geojson"
-    gmba_lines_path = r"C:\Users\ADMIN\.gemini\antigravity-ide\brain\f83657ce-68ad-4fb0-9fed-4aef6c30d42e\scratch\gmba_defense_mountain_lines.geojson"
+    gmba_polys_path = r"c:\Users\ADMIN\Desktop\Geopolitico\data\gmba_defense_mountains.geojson"
+    gmba_lines_path = r"c:\Users\ADMIN\Desktop\Geopolitico\data\gmba_defense_mountain_lines.geojson"
     ne_regions_path = r"c:\Users\ADMIN\Desktop\Geopolitico\data\ne_10m_geography_regions_polys.geojson"
 
     river_paths = [
