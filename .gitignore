@@ -32,3 +32,4 @@ data/hgis_datasets/
 data/whg_cache/
 data/blacklisted_models.json
 data/cliopatria_polities.geojson
+GMBA_Inventory_v2.0_standard/
