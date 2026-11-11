@@ -56,10 +56,10 @@ class TeeStderr(object):
             pass
         self.stderr.flush()
 
-# Configure logging path in the project root directory
+# Configure logging path in the project root directory (use append mode so reloads never truncate active logs)
 log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "simulation.log")
-sys.stdout = Tee(log_path, "w")
-sys.stderr = TeeStderr(log_path, "w")
+sys.stdout = Tee(log_path, "a")
+sys.stderr = TeeStderr(log_path, "a")
 
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks

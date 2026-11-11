@@ -177,7 +177,7 @@ def run_conquest_sim(
     all_available_units = set()
     unit_geom_map = {}
     unit_polity_map = {}
-    active_prompt_pols = list(context_val.get("all_baseline_polities") or context_val.get("parties") or baseline_polities)
+    active_prompt_pols = list(context_val.get("parties") or context_val.get("baseline_polities") or baseline_polities)
 
     # Filter out polities belonging exclusively to an inactive compounding stage theater
     scen_lower = scenario_val.lower()
@@ -185,9 +185,9 @@ def run_conquest_sim(
     is_frank_stage = any(k in scen_lower for k in ["tours", "frank", "poitiers", "gaul", "france", "aquitaine"]) and not any(k in scen_lower for k in ["constantinople", "byzantine", "byzantium", "anatolia"])
 
     for bp in active_prompt_pols:
-        if bp.lower() == conqueror_polity.lower():
-            continue
         bp_low = bp.lower()
+        if bp_low == conqueror_polity.lower() or (conqueror_polity and (conqueror_polity.lower() in bp_low or bp_low in conqueror_polity.lower())):
+            continue
         if is_byz_stage and ("frank" in bp_low):
             continue
         if is_frank_stage and ("byzant" in bp_low or "eastern roman" in bp_low):
@@ -225,40 +225,16 @@ def run_conquest_sim(
     except Exception:
         pass
 
-    sorted_avail = sorted(all_available_units)
-    if sorted_avail:
-        briefing_lines = []
-        for u_name in sorted_avail:
-            u_pol = unit_polity_map.get(u_name, "Target Polity")
-            u_meta = unit_meta_lookup.get(u_name, {})
-            u_cap = u_meta.get("capital_modern") or u_meta.get("capital_historical") or ""
-            u_tier = u_meta.get("tier") or "Region"
-            cap_str = f", Capital: {u_cap}" if u_cap else ""
-
-            neighbors = []
-            u_geom = unit_geom_map.get(u_name)
-            if u_geom and not u_geom.is_empty:
-                if winner_base_sh and not winner_base_sh.is_empty:
-                    try:
-                        if u_geom.distance(winner_base_sh) <= 0.06:
-                            neighbors.append("[CONQUEROR FRONTIER]")
-                    except Exception:
-                        pass
-                for other_u in sorted_avail:
-                    if other_u == u_name:
-                        continue
-                    o_geom = unit_geom_map.get(other_u)
-                    if o_geom and not o_geom.is_empty:
-                        try:
-                            if u_geom.distance(o_geom) <= 0.05:
-                                neighbors.append(other_u)
-                        except Exception:
-                            pass
-            adj_str = f" | Borders: {', '.join(neighbors)}" if neighbors else ""
-            briefing_lines.append(f"  * \"{u_name}\" ({u_pol} {u_tier}{cap_str}){adj_str}")
-        available_units_str = "\n" + "\n".join(briefing_lines)
-    else:
-        available_units_str = "None"
+    from backend.tools.terrain_barrier_analyzer import prepare_scored_and_bisected_units
+    available_units_str = prepare_scored_and_bisected_units(
+        all_available_units=all_available_units,
+        unit_geom_map=unit_geom_map,
+        unit_polity_map=unit_polity_map,
+        unit_meta_lookup=unit_meta_lookup,
+        winner_base_sh=winner_base_sh,
+        scenario_val=scenario_val,
+        context_val=context_val
+    )
 
     prompt_vars = {
         "scenario": scenario_val,
@@ -327,7 +303,7 @@ def run_conquest_sim(
             "REALISTIC military simulation: Select the complete, contiguous set of historical administrative units in `historical_provinces` "
             "that the conqueror must annex to connect `[CONQUEROR FRONTIER]` to the scenario's primary focal objective(s), plus the immediate theater of victory. "
             "Use the provided `Borders:` adjacency list to include every intermediate stepping-stone province along the campaign corridor so zero un-annexed holes remain behind the advance. "
-            "Stop at the realistic extent of the campaign objective (e.g., for Constantinople 717 AD, annex the Anatolian corridor and Thrace/Constantinople without jumping deep into Balkan Europe or Italy; for Tours 732 AD, annex Septimania and Aquitaine/southern Gaul without annexing distant German duchies like Saxony or Bavaria). "
+            "Stop at the realistic river/mountain barrier of the campaign objective (e.g., for Constantinople 717 AD, annex the Anatolian corridor and Thrace/Constantinople without jumping deep into Balkan Europe or Italy; for Tours 732 AD, annex Septimania and Aquitaine (South of Loire) halting at the Loire River without annexing Neustria north of the Loire or distant German duchies). "
             "Set `countries_absorbed`: [] and `partial_countries`: [] when specifying `historical_provinces`."
         )
         
@@ -524,30 +500,19 @@ def enforce_additive_optimistic_expansion(
         except Exception:
             pass
 
-    # Step 1: Collect candidate historical units from active target polities in the current stage's theater
+    # Step 1: Collect candidate historical units strictly from the active combatant polities in the current stage's theater
     h_map_all = {}
     active_search_pols = set(
-        (context_val.get("all_baseline_polities", []) if context_val else []) + 
         baseline_pols + 
         (context_val.get("parties", []) if context_val else [])
     )
-    if context_val and "geojson_before" in context_val and isinstance(context_val["geojson_before"], dict):
-        for feat in context_val["geojson_before"].get("features", []):
-            f_props = feat.get("properties", {})
-            for k in ["canonical_name", "name", "original_polity"]:
-                v = f_props.get(k)
-                if v and isinstance(v, str):
-                    clean_v = v.split("(")[0].strip()
-                    active_search_pols.add(v)
-                    if clean_v:
-                        active_search_pols.add(clean_v)
 
     if any(k in scen_lower or k in (context_val.get("target_region", "") if context_val else "").lower() for k in ["vienna", "austria", "habsburg", "wien", "hungary"]):
         active_search_pols.update(["Archduchy of Austria", "Kingdom of Hungary"])
 
     for bp in active_search_pols:
         bp_low = bp.lower()
-        if bp_low == winner_polity.lower() or (winner_polity and winner_polity.lower() in bp_low):
+        if bp_low == winner_polity.lower() or (winner_polity and (winner_polity.lower() in bp_low or bp_low in winner_polity.lower())):
             continue
         if is_byz_stage and "frank" in bp_low:
             continue
@@ -560,6 +525,22 @@ def enforce_additive_optimistic_expansion(
                     h_map_all[u_k] = u_v
         except Exception:
             pass
+
+    if context_val and isinstance(context_val.get("dynamic_bisected_units"), dict):
+        for b_k, b_v in context_val["dynamic_bisected_units"].items():
+            if b_v and not b_v.is_empty:
+                h_map_all[b_k] = b_v
+
+    from backend.tools.terrain_barrier_analyzer import score_province
+    cached_scores = (context_val.get("province_scores") or {}) if context_val else {}
+
+    def _get_prov_score(u_name: str, u_geom: Any, front_sh: Any, mode_label: str) -> float:
+        key = "score_real" if mode_label == "realistic" else "score_opt"
+        if u_name in cached_scores:
+            return float(cached_scores[u_name].get(key, 0.55))
+        sc = score_province(u_name, u_geom, front_sh)
+        cached_scores[u_name] = sc
+        return float(sc.get(key, 0.55))
 
     # Resolve winner's baseline geometry for frontier contact measurement (including Stage 1 + 732 AD union if in Stage 2)
     winner_base_sh = None
@@ -637,11 +618,19 @@ def enforce_additive_optimistic_expansion(
                 clean_cand = cand_name.strip().replace("_", " ")
                 if clean_cand in current_clean or not cand_sh or cand_sh.is_empty:
                     continue
+                # Skip bisected sub-units during automatic enclave sealing, and never overwrite an existing bisected sub-unit with its full un-bisected parent
+                if " of " in cand_name and cand_name.endswith(")"):
+                    continue
+                if any(u.startswith(f"{clean_cand} (") and " of " in u for u in current_clean):
+                    continue
                 # Never auto-assimilate distant peripheral Bohemian/Silesian crown lands or trans-Rhine German duchies as gaps
                 cand_low = clean_cand.lower()
                 if any(ex in cand_low for ex in ["bohemia", "silesia", "saxony", "thuringia", "bavaria", "swabia"]):
                     continue
                 try:
+                    p_score = _get_prov_score(cand_name, cand_sh, active_front, label)
+                    if p_score < 0.35:
+                        continue
                     bnd = cand_sh.boundary
                     if not bnd or bnd.is_empty or bnd.length <= 0:
                         continue
@@ -655,12 +644,12 @@ def enforce_additive_optimistic_expansion(
                         in_corridor = bool(corridor_env.contains(cand_sh.centroid))
 
                         if ratio >= 0.65 or (ratio >= 0.42 and touches_base and touches_conq and in_corridor) or (ratio >= 0.58 and touches_conq and in_corridor):
-                            candidates_to_add.append((cand_name, ratio))
+                            candidates_to_add.append((cand_name, ratio * p_score))
                     else:
                         # Pass 2: Strict interior pocket/hole seal only (e.g. Croatia surrounded by Bosnia, Slavonia, Inner Austria)
                         touches_conq = bool(cand_sh.distance(conquered_union) <= 0.05)
                         if ratio >= 0.60 and touches_conq:
-                            candidates_to_add.append((cand_name, ratio))
+                            candidates_to_add.append((cand_name, ratio * p_score))
                 except Exception:
                     pass
 
@@ -670,19 +659,62 @@ def enforce_additive_optimistic_expansion(
             candidates_to_add.sort(key=lambda x: x[1], reverse=True)
             for gap_u, r_val in candidates_to_add:
                 if gap_u not in target_t.historical_provinces:
-                    print(f"[SIMULATOR-ALGO] Assimilating corridor/enclave unit '{gap_u}' (surrounded ratio: {r_val*100:.1f}%, pass {gap_pass+1}) into {label} conquest.", flush=True)
+                    print(f"[SIMULATOR-ALGO] Assimilating corridor/enclave unit '{gap_u}' (weighted score: {r_val*100:.1f}%, pass {gap_pass+1}) into {label} conquest.", flush=True)
                     target_t.historical_provinces.append(gap_u)
+
+    near_bank_clips = (context_val.get("river_near_bank_clips") or {}) if context_val else {}
 
     for t_opt in res_opt.territories:
         for t_real in res_real.territories:
             if t_opt.name.lower() == t_real.name.lower() or (winner_polity and winner_polity.lower() in t_opt.name.lower()):
+                # 0. If the scenario specifies or implies a river boundary, bisect any straddling frontier unit in Realistic mode
+                if near_bank_clips and getattr(t_real, "historical_provinces", None):
+                    updated_real_provs = []
+                    for r_u in t_real.historical_provinces:
+                        clip_info = near_bank_clips.get(r_u)
+                        should_clip = False
+                        if clip_info:
+                            r_riv_low = clip_info["river_name"].lower()
+                            if r_riv_low in scen_lower:
+                                should_clip = True
+                            elif is_frank_stage and r_riv_low == "loire" and r_u == "Aquitaine":
+                                should_clip = True
+                            elif "vienna" in scen_lower and r_riv_low == "danube" and "Lower Austria" in r_u:
+                                should_clip = True
+                        if should_clip:
+                            near_nm = clip_info["near_name"]
+                            print(f"[SIMULATOR-ALGO] Bisecting '{r_u}' along {clip_info['river_name']} River -> '{near_nm}' for realistic river boundary.", flush=True)
+                            updated_real_provs.append(near_nm)
+                        else:
+                            updated_real_provs.append(r_u)
+                    t_real.historical_provinces = list(dict.fromkeys(updated_real_provs))
+
+                # For Tours 732 AD, if Realistic halted at 'Aquitaine (South of Loire)', keep trans-Loire 'Neustria' in Optimistic only
+                if is_frank_stage and getattr(t_real, "historical_provinces", None):
+                    if "Aquitaine (South of Loire)" in t_real.historical_provinces and "Neustria" in t_real.historical_provinces:
+                        if "Neustria" not in t_opt.historical_provinces:
+                            t_opt.historical_provinces.append("Neustria")
+                        t_real.historical_provinces = [u for u in t_real.historical_provinces if u != "Neustria"]
+
                 # 1. Seal corridor/enclave gaps in Realistic independently first
                 _seal_corridor_and_enclave_gaps(t_real, "realistic")
 
                 # 2. Ensure Optimistic includes all Realistic units (additive invariant) before sealing Optimistic gaps
                 for r_u in (getattr(t_real, "historical_provinces", []) or []):
+                    if " of " in r_u and r_u.endswith(")"):
+                        parent_u = r_u.rsplit(" (", 1)[0].strip()
+                        if parent_u in t_opt.historical_provinces:
+                            continue
                     if r_u not in t_opt.historical_provinces:
                         t_opt.historical_provinces.append(r_u)
+
+                # Deduplicate bisected child partitions in Optimistic if the full parent province is already present
+                if getattr(t_opt, "historical_provinces", None):
+                    opt_parents = {u for u in t_opt.historical_provinces if not (" of " in u and u.endswith(")"))}
+                    t_opt.historical_provinces = [
+                        u for u in t_opt.historical_provinces
+                        if not (" of " in u and u.endswith(")") and u.rsplit(" (", 1)[0].strip() in opt_parents)
+                    ]
 
                 # 3. Seal corridor/enclave gaps in Optimistic independently
                 _seal_corridor_and_enclave_gaps(t_opt, "optimistic")
@@ -697,7 +729,7 @@ def enforce_additive_optimistic_expansion(
                     and not any(eu in u.lower() for u in h_opt_clean for eu in ["illyricum", "aegean", "macedonia", "hellas", "dalmatia"])
                 )
 
-                # 4. Topological Adjacency Expansion Fallback if Optimistic is still identical to Realistic (or lacks European bridgehead after Constantinople)
+                # 4. Province-Score Weighted Adjacency Expansion Fallback if Optimistic is still identical to Realistic
                 if h_opt_clean.issubset(h_real_clean) or len(h_opt_clean) <= len(h_real_clean) or needs_euro_bridgehead:
                     real_geoms = [g for g in (_lookup_unit_geom(k) for k in t_opt.historical_provinces) if g and not g.is_empty]
                     if not real_geoms:
@@ -715,14 +747,22 @@ def enforce_additive_optimistic_expansion(
                             cand_low = clean_cand.lower()
                             if any(ex in cand_low for ex in ["bohemia", "silesia", "saxony", "thuringia", "bavaria", "swabia", "sicily", "italy"]):
                                 continue
+                            if " of " in cand_key and cand_key.endswith(")"):
+                                parent_prefix = cand_key.rsplit(" (", 1)[0].strip().replace("_", " ")
+                                if parent_prefix in h_opt_clean or parent_prefix in h_real_clean:
+                                    continue
                             if clean_cand not in h_opt_clean and clean_cand not in h_real_clean and cand_geom and not cand_geom.is_empty:
                                 try:
+                                    p_score_opt = _get_prov_score(cand_key, cand_geom, real_union, "optimistic")
+                                    if p_score_opt < 0.32:
+                                        continue
                                     bnd = cand_geom.boundary
                                     if bnd and not bnd.is_empty:
                                         shared = bnd.intersection(real_buf)
                                         shared_len = shared.length if shared else 0.0
                                         if shared_len > 0:
-                                            ranked_neighbors.append((cand_key, shared_len))
+                                            weighted_val = shared_len * (p_score_opt ** 1.5)
+                                            ranked_neighbors.append((cand_key, weighted_val))
                                 except Exception:
                                     pass
                         ranked_neighbors.sort(key=lambda x: x[1], reverse=True)
@@ -738,12 +778,13 @@ def enforce_additive_optimistic_expansion(
                                 if any(ex in cand_low for ex in ["bohemia", "silesia", "saxony", "thuringia", "bavaria", "swabia"]):
                                     continue
                                 if clean_cand not in h_opt_clean and clean_cand not in h_real_clean and cand_geom and not cand_geom.is_empty:
-                                    dist_neighbors.append((cand_key, cand_geom.distance(ref_geom)))
+                                    p_score_opt = _get_prov_score(cand_key, cand_geom, ref_geom, "optimistic")
+                                    dist_neighbors.append((cand_key, cand_geom.distance(ref_geom) / max(p_score_opt, 0.2)))
                             dist_neighbors.sort(key=lambda x: x[1])
                             candidate_adjacent = [k for k, _ in dist_neighbors[:2]]
 
                     if candidate_adjacent:
-                        print(f"[SIMULATOR-ALGO] Programmatically expanding optimistic conquest into top topological neighbors: {candidate_adjacent}.", flush=True)
+                        print(f"[SIMULATOR-ALGO] Programmatically expanding optimistic conquest into top scored neighbors: {candidate_adjacent}.", flush=True)
                         for app_u in candidate_adjacent:
                             if app_u not in t_opt.historical_provinces:
                                 t_opt.historical_provinces.append(app_u)

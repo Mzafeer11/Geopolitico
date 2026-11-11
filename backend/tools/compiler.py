@@ -353,6 +353,8 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
             for bp in expanded_bps:
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map_all.update(res_hist.get("historical_units_map", {}))
+            if context and isinstance(context.get("dynamic_bisected_units"), dict):
+                h_map_all.update(context["dynamic_bisected_units"])
 
             # Filter out conqueror baseline territories that were already part of the conqueror's baseline empire
             if is_conquest and is_winner and winner_polity:
@@ -393,7 +395,36 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
                 candidate_units_map = {uname: unary_union(sl) for uname, sl in candidate_units_shapes.items()}
 
                 def _get_geom_for_hp(name_str):
+                    if name_str in h_map_all and h_map_all[name_str] and not h_map_all[name_str].is_empty:
+                        return h_map_all[name_str]
                     for h_key, geom in h_map_all.items():
+                        if name_str.lower() == h_key.lower() and geom and not geom.is_empty:
+                            return geom
+                    # Dynamic on-the-fly river bisection if name_str is "<Unit> (North/South/East/West of <River>)"
+                    m_bisect = re.match(r"^(.*)\s+\((North|South|East|West)\s+of\s+([^)]+)\)$", name_str, re.IGNORECASE)
+                    if m_bisect:
+                        parent_nm, side_dir, riv_nm = m_bisect.group(1).strip(), m_bisect.group(2).capitalize(), m_bisect.group(3).strip()
+                        parent_g = h_map_all.get(parent_nm)
+                        if parent_g:
+                            try:
+                                from backend.tools.terrain_barrier_analyzer import get_terrain_db, bisect_unit_by_river, _canonical_river_name
+                                tdb = get_terrain_db()
+                                canon_r = _canonical_river_name(riv_nm)
+                                r_g = tdb.rivers_by_name.get(canon_r)
+                                if r_g:
+                                    b_info = bisect_unit_by_river(parent_nm, parent_g, canon_r, r_g, winner_base_sh)
+                                    if b_info:
+                                        h_map_all[b_info["near_name"]] = b_info["near_geom"]
+                                        h_map_all[b_info["far_name"]] = b_info["far_geom"]
+                                        if b_info["near_dir"].lower() == side_dir.lower():
+                                            return b_info["near_geom"]
+                                        elif b_info["far_dir"].lower() == side_dir.lower():
+                                            return b_info["far_geom"]
+                            except Exception:
+                                pass
+                    for h_key, geom in h_map_all.items():
+                        if " of " in h_key and h_key.endswith(")") and " of " not in name_str:
+                            continue
                         if name_str.lower() in h_key.lower() or h_key.lower() in name_str.lower():
                             if geom and not geom.is_empty:
                                 return geom
@@ -469,15 +500,54 @@ def process_territory_definitions(territories: List[TerritoryChange], year: int,
             for bp in expanded_bps:
                 res_hist = get_historical_units(bp, year, context.get("target_region", "") if context else "")
                 h_map.update(res_hist.get("historical_units_map", {}))
+            if context and isinstance(context.get("dynamic_bisected_units"), dict):
+                h_map.update(context["dynamic_bisected_units"])
             
             for hp_name in t.historical_provinces:
                 hp_found = False
-                for h_key, geom in h_map.items():
-                    if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
-                        if geom and not geom.is_empty:
+                # 1. Exact or case-insensitive exact match first
+                if hp_name in h_map and h_map[hp_name] and not h_map[hp_name].is_empty:
+                    polity_additions_shapes[t.name].append(consolidate_enclave_dots(h_map[hp_name]))
+                    hp_found = True
+                if not hp_found:
+                    for h_key, geom in h_map.items():
+                        if hp_name.lower() == h_key.lower() and geom and not geom.is_empty:
                             polity_additions_shapes[t.name].append(consolidate_enclave_dots(geom))
                             hp_found = True
                             break
+                # 2. On-the-fly river bisection if hp_name is "<Unit> (North/South/East/West of <River>)"
+                if not hp_found:
+                    m_bisect = re.match(r"^(.*)\s+\((North|South|East|West)\s+of\s+([^)]+)\)$", hp_name, re.IGNORECASE)
+                    if m_bisect:
+                        parent_nm, side_dir, riv_nm = m_bisect.group(1).strip(), m_bisect.group(2).capitalize(), m_bisect.group(3).strip()
+                        parent_g = h_map.get(parent_nm)
+                        if parent_g:
+                            try:
+                                from backend.tools.terrain_barrier_analyzer import get_terrain_db, bisect_unit_by_river, _canonical_river_name
+                                tdb = get_terrain_db()
+                                canon_r = _canonical_river_name(riv_nm)
+                                r_g = tdb.rivers_by_name.get(canon_r)
+                                if r_g:
+                                    b_info = bisect_unit_by_river(parent_nm, parent_g, canon_r, r_g, winner_base_sh)
+                                    if b_info:
+                                        h_map[b_info["near_name"]] = b_info["near_geom"]
+                                        h_map[b_info["far_name"]] = b_info["far_geom"]
+                                        target_g = b_info["near_geom"] if b_info["near_dir"].lower() == side_dir.lower() else b_info["far_geom"]
+                                        if target_g and not target_g.is_empty:
+                                            polity_additions_shapes[t.name].append(consolidate_enclave_dots(target_g))
+                                            hp_found = True
+                            except Exception:
+                                pass
+                # 3. Substring fallback (skipping split child entries when matching an unsplit parent name)
+                if not hp_found:
+                    for h_key, geom in h_map.items():
+                        if " of " in h_key and h_key.endswith(")") and " of " not in hp_name:
+                            continue
+                        if hp_name.lower() in h_key.lower() or h_key.lower() in hp_name.lower():
+                            if geom and not geom.is_empty:
+                                polity_additions_shapes[t.name].append(consolidate_enclave_dots(geom))
+                                hp_found = True
+                                break
                 if not hp_found:
                     matched_feats = loader.get_province_features(hp_name, "")
                     if not matched_feats:

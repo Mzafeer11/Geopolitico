@@ -67,6 +67,11 @@ def resolve_modern_cities_to_historical_units(territories: List[TerritoryChange]
                     clean_name = sp_name.split("(")[0].strip().lower()
                     city_to_unit_map[clean_name] = assigned_u
 
+    # Register dynamically bisected river sub-provinces so they are never collapsed back into their un-bisected parent
+    if context and isinstance(context.get("dynamic_bisected_units"), dict):
+        for b_name in context["dynamic_bisected_units"].keys():
+            canonical_units_map[b_name.lower()] = b_name
+
     for t in territories:
         raw_list = getattr(t, "historical_provinces", [])
         if not raw_list:
@@ -77,9 +82,14 @@ def resolve_modern_cities_to_historical_units(territories: List[TerritoryChange]
             item_clean = item.strip().replace("_", " ")
             item_lower = item_clean.lower()
             
-            # 1. Direct match against canonical historical units
+            # 1. Direct match against canonical historical units (including river-bisected sub-units)
             if item_lower in canonical_units_map:
                 resolved_units.append(canonical_units_map[item_lower])
+                continue
+
+            # Preserve explicit river-bisected unit patterns "<Unit> (<Dir> of <River>)"
+            if " of " in item_lower and item_clean.endswith(")"):
+                resolved_units.append(item_clean)
                 continue
                 
             # Partial substring match against canonical historical units (only if word length > 4)
