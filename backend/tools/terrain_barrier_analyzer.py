@@ -446,15 +446,15 @@ def bisect_unit_by_river(
         dir_a = "South" if is_east_west else "West"
         dir_b = "North" if is_east_west else "East"
 
-        # Determine which side is the Near Bank (closer to local conqueror mass) vs Far Bank (across river)
+        # Determine which side is the Near Bank (closer to conqueror) vs Far Bank (across river)
         a_is_near = True
         if conqueror_geom and not conqueror_geom.is_empty:
-            local_conq = conqueror_geom.intersection(unit_geom.buffer(5.0))
-            if not local_conq or local_conq.is_empty:
-                local_conq = conqueror_geom
-            ref_pt = local_conq.centroid
-            dist_a = geom_a.centroid.distance(ref_pt)
-            dist_b = geom_b.centroid.distance(ref_pt)
+            dist_a = geom_a.distance(conqueror_geom)
+            dist_b = geom_b.distance(conqueror_geom)
+            if abs(dist_a - dist_b) < 1e-4:
+                # Tie-breaker: distance from centroid to conqueror
+                dist_a = geom_a.centroid.distance(conqueror_geom)
+                dist_b = geom_b.centroid.distance(conqueror_geom)
             a_is_near = (dist_a <= dist_b)
 
         if a_is_near:
